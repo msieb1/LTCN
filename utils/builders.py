@@ -25,6 +25,7 @@ from plot_utils import concat_frames_nosave
 sys.path.append('/home/msieb/projects/Mask_RCNN/samples')
 from baxter.baxter import BaxterConfig, InferenceConfig
 
+OFFSET = 1
 
 class SingleViewTripletBuilder(object):
     def __init__(self, view, video_directory, image_size, cli_args, sample_size=500):
@@ -552,7 +553,7 @@ class MultiViewTripletBuilder(object):
         self._count_frames()
         # The negative example has to be from outside the buffer window. Taken from both sides of
         # ihe frame.
-        self.negative_frame_margin = 30
+        self.negative_frame_margin = 5 
         self.sequence_index = 0
         self.cli_args = cli_args
         self.sample_size = sample_size
@@ -641,6 +642,118 @@ class MultiViewTripletBuilder(object):
 
     def sample_negative_frame_index(self, anchor_index):
         return np.random.choice(self.negative_frame_indices(anchor_index))
+
+class MultiViewMultiFrameTripletBuilder(object):
+    def __init__(self, n_views, n_prev_frames, video_directory, image_size, cli_args, sample_size=500):
+        self.frame_size = image_size
+        self.n_views = n_views
+        self.n_prev_frames = n_prev_frames
+        self._read_video_dir(video_directory)
+
+        self._count_frames()
+        # The negative example has to be from outside the buffer window. Taken from both sides of
+        # ihe frame.
+        self.negative_frame_margin = 5 
+        self.sequence_index = 0
+        self.cli_args = cli_args
+        self.sample_size = sample_size
+
+    def _read_video_dir(self, video_directory):
+        self._video_directory = video_directory
+        filenames = ls(video_directory)
+        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames]
+        # for path in self.video_paths:
+        #     print(path)
+        self.sequence_count = int(len(self.video_paths) / self.n_views)
+
+    def _count_frames(self):
+        frame_lengths = np.array([len(imageio.read(p)) for p in self.video_paths])
+        self.frame_lengths = frame_lengths - OFFSET
+        self.cumulative_lengths = np.zeros(len(self.frame_lengths), dtype=np.int32)
+        prev = 0
+        for i, frames in enumerate(self.frame_lengths):
+            prev = self.cumulative_lengths[i-1]
+            self.cumulative_lengths[i] = prev + frames
+
+    @functools.lru_cache(maxsize=1)
+    def get_videos(self, index):
+        views = []
+        for i in range(self.n_views):
+            views.append(read_video(self.video_paths[index + i], self.frame_size))
+        return views
+
+    def sample_triplet(self, snaps):
+        loaded_sample = False
+        while not loaded_sample:
+
+            try:
+                anchor_index = self.sample_anchor_frame_index()
+                positive_index = anchor_index
+                negative_index = self.sample_negative_frame_index(anchor_index)
+                loaded_sample = True
+            except:
+                pass
+                # print("Error loading video - sequence index: ", self.sequence_index)
+                # print("video lengths: ", [len(snaps[i]) for i in range(0, len(snaps))])
+                # print("Maybe margin too high")
+        # random sample anchor view,and positive view
+        view_set = set(range(self.n_views))
+        anchor_view = np.random.choice(np.array(list(view_set)))
+        view_set.remove(anchor_view)
+        positive_view = np.random.choice(np.array(list(view_set)))
+        negative_view = anchor_view # negative example comes from same view INQUIRE TODO
+
+        anchor_frame = np.zeros((self.n_prev_frames + 1, 3, 299, 299))
+        positive_frame = np.zeros((self.n_prev_frames + 1, 3, 299, 299))
+        negative_frame = np.zeros((self.n_prev_frames + 1, 3, 299, 299))
+        anchor_frame[0] = snaps[anchor_view][anchor_index]
+        positive_frame[0] = snaps[positive_view][positive_index]
+        negative_frame[0] = snaps[negative_view][negative_index]
+        
+        for ii in range(self.n_prev_frames):
+            
+            anchor_frame[ii] = snaps[anchor_view][anchor_index-ii]
+            positive_frame[ii] = snaps[positive_view][positive_index-ii]
+            negative_frame[ii] = snaps[negative_view][negative_index-ii]
+
+
+        return (torch.Tensor(anchor_frame), torch.Tensor(positive_frame),
+            torch.Tensor(negative_frame))
+
+    def build_set(self):
+        triplets = []
+        triplets = torch.Tensor(self.sample_size, self.n_prev_frames + 1, 3, 3, *self.frame_size)
+        for i in range(0, self.sample_size):
+            snaps = self.get_videos(self.sequence_index * self.n_views)
+            anchor_frame, positive_frame, negative_frame = self.sample_triplet(snaps)
+            triplets[i, :, 0, :, :, :] = anchor_frame
+            triplets[i, :, 1, :, :, :] = positive_frame
+            triplets[i, :, 2, :, :, :] = negative_frame
+        self.sequence_index = (self.sequence_index + 1) % self.sequence_count
+        # Second argument is labels. Not used.
+        return TensorDataset(triplets, torch.zeros(triplets.size()[0]))
+
+    def sample_anchor_frame_index(self):
+        arange = np.arange(0 + self.n_prev_frames, self.frame_lengths[self.sequence_index * self.n_views])
+        return np.random.choice(arange)
+
+    # def sample_positive_frame_index(self, anchor_index):
+    #     upper_bound = min(self.frame_lengths[self.sequence_index * self.n_views + 1] - 1, anchor_index)
+    #     return upper_bound # in case video has less frames than anchor video
+
+    def negative_frame_indices(self, anchor_index):
+        video_length = self.frame_lengths[self.sequence_index * self.n_views]
+        lower_bound = self.n_prev_frames
+        upper_bound = max(0, anchor_index - self.negative_frame_margin)
+        range1 = np.arange(lower_bound, upper_bound)
+        lower_bound = min(anchor_index + self.negative_frame_margin, video_length)
+        upper_bound = video_length
+        range2 = np.arange(lower_bound, upper_bound)
+        return np.concatenate([range1, range2])
+
+    def sample_negative_frame_index(self, anchor_index):
+        return np.random.choice(self.negative_frame_indices(anchor_index))
+
 
 class MultiViewDepthTripletBuilder(MultiViewTripletBuilder):
     def __init__(self, n_views, video_directory, depth_video_directory, image_size, cli_args, sample_size=500):

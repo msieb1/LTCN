@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('Agg')
 import os
 import argparse
 import torch
@@ -12,21 +14,19 @@ from torch import multiprocessing
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder
+from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder, MultiViewMultiFrameTripletBuilder
 from utils.util import distance, Logger, ensure_folder, collate_fn
 from utils.vocabulary import Vocabulary
-from tcn import define_model_depth
+from mftcn import define_model
 from ipdb import set_trace
 from sklearn.preprocessing import OneHotEncoder
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torchvision import transforms
 
 from utils.plot_utils import plot_mean
-import matplotlib
-matplotlib.use('Agg')
+
 
 IMAGE_SIZE = (299, 299)
-
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 os.environ["CUDA_VISIBLE_DEVICES"]= "1,2"
 
@@ -34,7 +34,7 @@ ITERATE_OVER_TRIPLETS =5
 
 EXP_NAME = 'duck/'
 EXP_DIR = os.path.join('/media/msieb/data/tcn_data/experiments', EXP_NAME)
-MODEL_FOLDER = 'tcn-depth-mv'
+MODEL_FOLDER = 'mftcn-rgb-mv'
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -46,10 +46,8 @@ def get_args():
     # parser.add_argument('--train-directory', type=str, default='./data/multiview-pouring/train/')
     # parser.add_argument('--validation-directory', type=str, default='./data/multiview-pouring/val/')
     parser.add_argument('--train-directory', type=str, default=EXP_DIR + 'videos/train/')
-    parser.add_argument('--train-directory-depth', type=str, default=EXP_DIR + 'depth/train/')
 
     parser.add_argument('--validation-directory', type=str, default=EXP_DIR + 'videos/valid/')
-    parser.add_argument('--validation-directory-depth', type=str, default=EXP_DIR + 'depth/valid/')
 
     parser.add_argument('--minibatch-size', type=int, default=16)
     parser.add_argument('--margin', type=float, default=2.0)
@@ -59,6 +57,7 @@ def get_args():
     parser.add_argument('--triplets-from-videos', type=int, default=5)
     parser.add_argument('--n-views', type=int, default=2)
     parser.add_argument('--alpha', type=float, default=0.001, help='weighing factor of language loss to triplet loss')
+
 
     # parser.add_argument('--model_path', type=str, default='models/' , help='path for saving trained models')
     # parser.add_argument('--crop_size', type=int, default=224 , help='size for randomly cropping images')
@@ -81,15 +80,15 @@ def get_args():
 
 args = get_args()
 print(args)
-builder = MultiViewDepthTripletBuilder
-
+builder = MultiViewMultiFrameTripletBuilder
+n_prev_frames = 3
 logger = Logger(args.log_file)
 
 def batch_size(epoch, max_size):
     exponent = epoch // 100
     return min(max(2 ** (exponent), 2), max_size)
-validation_builder = builder(args.n_views, args.validation_directory, args.validation_directory_depth, IMAGE_SIZE, args, sample_size=2)
-validation_set = [validation_builder.build_set() for i in range(14)]
+validation_builder = builder(args.n_views, n_prev_frames, args.validation_directory, IMAGE_SIZE, args, sample_size=5)
+validation_set = [validation_builder.build_set() for i in range(5)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
 
@@ -109,10 +108,9 @@ def validate(tcn, use_cuda, args):
 
         if use_cuda:
             frames = minibatch.cuda()
-
-        anchor_frames = frames[:, 0, :, :, :]
-        positive_frames = frames[:, 1, :, :, :]
-        negative_frames = frames[:, 2, :, :, :]
+        anchor_frames = frames[:, :, 0, :, :, :]
+        positive_frames = frames[:, :, 1, :, :, :]
+        negative_frames = frames[:, :, 2, :, :, :]
 
         anchor_output, unnormalized, _ = tcn(anchor_frames)
         positive_output, _, _ = tcn(positive_frames)
@@ -153,7 +151,7 @@ def save_model(model, filename, model_folder):
 def build_set(queue, triplet_builder, log):
     while 1:
         datasets = []
-        for i in range(3):
+        for i in range(5):
             dataset = triplet_builder.build_set()
             datasets.append(dataset)
         dataset = ConcatDataset(datasets)
@@ -161,7 +159,7 @@ def build_set(queue, triplet_builder, log):
         queue.put(dataset)
 
 def create_model(use_cuda):
-    tcn = define_model_depth(use_cuda)
+    tcn = define_model(use_cuda)
     # tcn = PosNet()
     if args.load_model:
         model_path = os.path.join(
@@ -179,11 +177,11 @@ def create_model(use_cuda):
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     use_cuda = torch.cuda.is_available()
-
+    print(use_cuda)
     tcn = create_model(use_cuda)
     tcn = torch.nn.DataParallel(tcn, device_ids=range(torch.cuda.device_count()))
-    triplet_builder = builder(args.n_views, \
-        args.train_directory, args.train_directory_depth, IMAGE_SIZE, args, sample_size=5)
+    triplet_builder = builder(args.n_views, n_prev_frames, \
+        args.train_directory, IMAGE_SIZE, args, sample_size=20)
 
     queue = multiprocessing.Queue(1)
     dataset_builder_process = multiprocessing.Process(target=build_set, args=(queue, triplet_builder, logger), daemon=True)
@@ -223,9 +221,11 @@ def main():
                 # frames = Variable(minibatch)
                 if use_cuda:
                     frames = minibatch.cuda()
-                anchor_frames = frames[:, 0, :, :, :]
-                positive_frames = frames[:, 1, :, :, :]
-                negative_frames = frames[:, 2, :, :, :]
+                set_trace()
+
+                anchor_frames = frames[:, :, 0, :, :, :]
+                positive_frames = frames[:, :, 1, :, :, :]
+                negative_frames = frames[:, :, 2, :, :, :]
 
                 anchor_output, unnormalized, _ = tcn(anchor_frames)
                 positive_output, _, _ = tcn(positive_frames)

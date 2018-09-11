@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('Agg')
 import os
 import argparse
 import torch
@@ -12,7 +14,8 @@ from torch import multiprocessing
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.util import (MultiViewTripletBuilder, SingleViewTripletBuilder,distance, Logger, ensure_folder, collate_fn)
+from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder
+from utils.util import distance, Logger, ensure_folder, collate_fn
 from utils.vocabulary import Vocabulary
 from tcn import define_model
 from ipdb import set_trace
@@ -22,31 +25,39 @@ from torchvision import transforms
 
 from utils.plot_utils import plot_mean
 
+
 IMAGE_SIZE = (299, 299)
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]= "1,2"
 
-os.environ["CUDA_VISIBLE_DEVICES"]= "0,1,2"
+ITERATE_OVER_TRIPLETS =5 
 
-ITERATE_OVER_TRIPLETS = 3
+EXP_NAME = 'duck/'
+EXP_DIR = os.path.join('/media/msieb/data/tcn_data/experiments', EXP_NAME)
+MODEL_FOLDER = 'tcn-rgb-mv'
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--start-epoch', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--save-every', type=int, default=4)
-    parser.add_argument('--model-folder', type=str, default='/home/msieb/experiments/tcn_data/pushing_rings/trained_models/no_caption_sv_2')
+    parser.add_argument('--save-every', type=int, default=5)
+    parser.add_argument('--model-folder', type=str, default=EXP_DIR + 'trained_models/' + MODEL_FOLDER)
     parser.add_argument('--load-model', type=str, required=False)
     # parser.add_argument('--train-directory', type=str, default='./data/multiview-pouring/train/')
     # parser.add_argument('--validation-directory', type=str, default='./data/multiview-pouring/val/')
-    parser.add_argument('--train-directory', type=str, default='/home/msieb/experiments/tcn_data/pushing_rings/videos/train/')
-    parser.add_argument('--validation-directory', type=str, default='/home/msieb/experiments/tcn_data/pushing_rings/videos/valid/')
-    parser.add_argument('--minibatch-size', type=int, default=32)
-    parser.add_argument('--margin', type=float, default=4.0)
+    parser.add_argument('--train-directory', type=str, default=EXP_DIR + 'videos/train/')
+
+    parser.add_argument('--validation-directory', type=str, default=EXP_DIR + 'videos/valid/')
+
+    parser.add_argument('--minibatch-size', type=int, default=16)
+    parser.add_argument('--margin', type=float, default=2.0)
     parser.add_argument('--model-name', type=str, default='tcn-no-labels-mv')
     parser.add_argument('--log-file', type=str, default='./out.log')
     parser.add_argument('--lr-start', type=float, default=0.001)
     parser.add_argument('--triplets-from-videos', type=int, default=5)
-    parser.add_argument('--n-views', type=int, default=3)
+    parser.add_argument('--n-views', type=int, default=2)
     parser.add_argument('--alpha', type=float, default=0.001, help='weighing factor of language loss to triplet loss')
+
 
     # parser.add_argument('--model_path', type=str, default='models/' , help='path for saving trained models')
     # parser.add_argument('--crop_size', type=int, default=224 , help='size for randomly cropping images')
@@ -76,7 +87,7 @@ logger = Logger(args.log_file)
 def batch_size(epoch, max_size):
     exponent = epoch // 100
     return min(max(2 ** (exponent), 2), max_size)
-validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=100)
+validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=5)
 validation_set = [validation_builder.build_set() for i in range(5)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
@@ -171,7 +182,7 @@ def main():
     tcn = create_model(use_cuda)
     tcn = torch.nn.DataParallel(tcn, device_ids=range(torch.cuda.device_count()))
     triplet_builder = builder(args.n_views, \
-        args.train_directory, IMAGE_SIZE, args, sample_size=200)
+        args.train_directory, IMAGE_SIZE, args, sample_size=20)
 
     queue = multiprocessing.Queue(1)
     dataset_builder_process = multiprocessing.Process(target=build_set, args=(queue, triplet_builder, logger), daemon=True)
