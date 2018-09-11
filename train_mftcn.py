@@ -28,12 +28,15 @@ from utils.plot_utils import plot_mean
 
 IMAGE_SIZE = (299, 299)
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]= "1,2"
+os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1,2,3"
 
-ITERATE_OVER_TRIPLETS =5 
+ITERATE_OVER_TRIPLETS = 3 
 
 EXP_NAME = 'duck/'
-EXP_DIR = os.path.join('/media/msieb/data/tcn_data/experiments', EXP_NAME)
+
+#EXP_DIR = os.path.join('/home/msieb/data/tcn_data/experiments', EXP_NAME)
+EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
+
 MODEL_FOLDER = 'mftcn-rgb-mv'
 
 def get_args():
@@ -49,7 +52,7 @@ def get_args():
 
     parser.add_argument('--validation-directory', type=str, default=EXP_DIR + 'videos/valid/')
 
-    parser.add_argument('--minibatch-size', type=int, default=16)
+    parser.add_argument('--minibatch-size', type=int, default=2)
     parser.add_argument('--margin', type=float, default=2.0)
     parser.add_argument('--model-name', type=str, default='tcn-no-labels-mv')
     parser.add_argument('--log-file', type=str, default='./out.log')
@@ -221,8 +224,7 @@ def main():
                 # frames = Variable(minibatch)
                 if use_cuda:
                     frames = minibatch.cuda()
-                set_trace()
-
+                
                 anchor_frames = frames[:, :, 0, :, :, :]
                 positive_frames = frames[:, :, 1, :, :, :]
                 negative_frames = frames[:, :, 2, :, :, :]

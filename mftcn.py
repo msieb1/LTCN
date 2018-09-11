@@ -133,15 +133,14 @@ class TCNModel(EmbeddingNet):
 
     def forward(self, x):
         if self.transform_input:
-            if x.shape[1] == 4:
-                x = x[:, :-1].clone()
-            else:
-                x = x.clone()
+            x = x.clone()
             x[:, :, 0] = x[:, :, 0] * (0.229 / 0.5) + (0.485 - 0.5) / 0.5
             x[:, :, 1] = x[:, :, 1] * (0.224 / 0.5) + (0.456 - 0.5) / 0.5
             x[:, :, 2] = x[:, :, 2] * (0.225 / 0.5) + (0.406 - 0.5) / 0.5
         # 299 x 299 x 3
-        set_trace()
+        batch_size = x.size()[0]
+        frames_per_batch = x.size()[1]
+        x = x.view(x.size()[0] * x.size()[1], 3, 299, 299)
         x = self.Conv2d_1a_3x3(x)
         # 149 x 149 x 32
         x = self.Conv2d_2a_3x3(x)
@@ -167,7 +166,9 @@ class TCNModel(EmbeddingNet):
         x = self.Conv2d_6b_3x3(x)
         # 31 x 31 x 20
         #x = self.SpatialSoftmax(x)
-        x = torch.mean(x, 0)
+        x = x.view(batch_size, frames_per_batch, 31 , 31,  20)
+        
+        x = torch.mean(x, 1)
         # 32
         x = self.FullyConnected7a(x.view(x.size()[0], -1))
 

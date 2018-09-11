@@ -17,13 +17,13 @@ import matplotlib.pyplot as plt
 from scipy import ndimage as ndi
 import time
 
-from util import distance, view_image, write_to_csv, ensure_folder, resize_frame, write_video, \
+from builder_utils import distance, view_image, write_to_csv, ensure_folder, resize_frame, write_video, \
                 read_video, read_extracted_rcnn_results, read_caption, ls_directories, ls, ls_unparsed_txt, ls_npy, \
                 ls_txt, ls_view, read_extracted_video, Logger, ls_extracted, crop_box, crop_uniform_box, get_box_center
 from plot_utils import concat_frames_nosave
 
-sys.path.append('/home/msieb/projects/Mask_RCNN/samples')
-from baxter.baxter import BaxterConfig, InferenceConfig
+#sys.path.append('/home/msieb/projects/Mask_RCNN/samples')
+#from baxter.baxter import BaxterConfig, InferenceConfig
 
 OFFSET = 1
 
