@@ -15,7 +15,7 @@ from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
 from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder, MultiViewMultiFrameTripletBuilder
-from utils.util import distance, Logger, ensure_folder, collate_fn
+from utils.builder_utils import distance, Logger, ensure_folder, collate_fn
 from utils.vocabulary import Vocabulary
 from mftcn import define_model
 from ipdb import set_trace
