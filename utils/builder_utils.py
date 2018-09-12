@@ -13,9 +13,14 @@ from vocabulary import Vocabulary
 import sys
 import matplotlib.pyplot as plt
 import pickle
-
+import datetime
 from ipdb import set_trace
 
+def time_stamped_w_name(fname, fmt='%Y-%m-%d-%H-%M-%S_{fname}'):
+    return datetime.datetime.now().strftime(fmt).format(fname=fname)
+
+def time_stamped(fmt='%Y-%m-%d-%H-%M-%S{}'):
+    return datetime.datetime.now().strftime(fmt).format('')
 
 def distance(x1, x2):
     diff = torch.abs(x1 - x2)

@@ -14,7 +14,8 @@ from torch import multiprocessing
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder, MultiViewMultiFrameTripletBuilder
+from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, \
+MultiViewTripletBuilder, SingleViewMultiFrameTripletBuilder, MultiViewMultiFrameTripletBuilder
 from utils.builder_utils import distance, Logger, ensure_folder, collate_fn
 from utils.vocabulary import Vocabulary
 from mftcn import define_model
@@ -22,6 +23,9 @@ from ipdb import set_trace
 from sklearn.preprocessing import OneHotEncoder
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torchvision import transforms
+import torchvision.models as models
+from torchvision import datasets
+from tensorboardX import SummaryWriter
 
 from utils.plot_utils import plot_mean
 
@@ -38,6 +42,11 @@ EXP_NAME = 'duck/'
 EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
 
 MODEL_FOLDER = 'mftcn-rgb-mv'
+SAMPLE_SIZE = 100
+builder = SingleViewTripletBuilder
+logdir = os.path.join('runs', time_stamped()) 
+print("logging to {}".format(logdir))
+writer = SummaryWriter(logdir)
 
 def get_args():
     parser = argparse.ArgumentParser()

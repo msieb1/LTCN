@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import pickle
 import sys
+import datetime
 sys.path.append('./utils')
 
 from torch import optim
@@ -14,27 +15,40 @@ from torch import multiprocessing
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder
-from utils.util import distance, Logger, ensure_folder, collate_fn
+from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder, SingleViewTripletBuilder
+from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped
 from utils.vocabulary import Vocabulary
 from tcn import define_model
 from ipdb import set_trace
 from sklearn.preprocessing import OneHotEncoder
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torchvision import transforms
+import torchvision.utils as vutils
+import torchvision.models as models
+from torchvision import datasets
+from tensorboardX import SummaryWriter
 
 from utils.plot_utils import plot_mean
 
 
 IMAGE_SIZE = (299, 299)
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]= "1,2"
+os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1,2,3"
 
-ITERATE_OVER_TRIPLETS =5 
+ITERATE_OVER_TRIPLETS = 3 
 
 EXP_NAME = 'duck/'
-EXP_DIR = os.path.join('/media/msieb/data/tcn_data/experiments', EXP_NAME)
-MODEL_FOLDER = 'tcn-rgb-mv'
+
+#EXP_DIR = os.path.join('/home/msieb/data/tcn_data/experiments', EXP_NAME)
+EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
+
+MODEL_FOLDER = 'tcn-rgb-sv'
+
+SAMPLE_SIZE = 100
+builder = SingleViewTripletBuilder
+logdir = os.path.join('runs', time_stamped()) 
+print("logging to {}".format(logdir))
+writer = SummaryWriter(logdir)
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -55,7 +69,7 @@ def get_args():
     parser.add_argument('--log-file', type=str, default='./out.log')
     parser.add_argument('--lr-start', type=float, default=0.001)
     parser.add_argument('--triplets-from-videos', type=int, default=5)
-    parser.add_argument('--n-views', type=int, default=2)
+    parser.add_argument('--n-views', type=int, default=3)
     parser.add_argument('--alpha', type=float, default=0.001, help='weighing factor of language loss to triplet loss')
 
 
@@ -80,19 +94,19 @@ def get_args():
 
 args = get_args()
 print(args)
-builder = MultiViewTripletBuilder
 
 logger = Logger(args.log_file)
 
 def batch_size(epoch, max_size):
     exponent = epoch // 100
     return min(max(2 ** (exponent), 2), max_size)
-validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=5)
+validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
 validation_set = [validation_builder.build_set() for i in range(5)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
 
-def validate(tcn, use_cuda, args):
+
+def validate(tcn, use_cuda, n_calls):
     # Run model on validation data and log results
     data_loader = DataLoader(
                     validation_set, 
@@ -128,7 +142,8 @@ def validate(tcn, use_cuda, args):
         loss_triplet = torch.clamp(args.margin + d_positive - d_negative, min=0.0).mean()
         loss = loss_triplet
         losses.append(loss.data.cpu().numpy())
-    
+    writer.add_scalar('data/validation_loss', np.mean(losses), n_calls) 
+    n_calls += 1
     loss = np.mean(losses)
     logger.info('val loss: ',loss)
 
@@ -138,7 +153,7 @@ def validate(tcn, use_cuda, args):
         total=len(validation_set)
     )
     logger.info(message)
-    return correct_with_margin, correct_without_margin, loss 
+    return correct_with_margin, correct_without_margin, loss, n_calls
 
 def model_filename(model_name, epoch):
     return "{model_name}-epoch-{epoch}.pk".format(model_name=model_name, epoch=epoch)
@@ -182,7 +197,7 @@ def main():
     tcn = create_model(use_cuda)
     tcn = torch.nn.DataParallel(tcn, device_ids=range(torch.cuda.device_count()))
     triplet_builder = builder(args.n_views, \
-        args.train_directory, IMAGE_SIZE, args, sample_size=20)
+        args.train_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
 
     queue = multiprocessing.Queue(1)
     dataset_builder_process = multiprocessing.Process(target=build_set, args=(queue, triplet_builder, logger), daemon=True)
@@ -200,6 +215,8 @@ def main():
     val_acc_margin_ = []
     val_acc_no_margin_ = []
 
+    n_iter = 0
+    n_valid_iter = 0
     for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
         print("=" * 20)
         logger.info("Starting epoch: {0} learning rate: {1}".format(epoch,
@@ -213,7 +230,7 @@ def main():
             shuffle=True,
             pin_memory=use_cuda,
         )
-
+        
 
         for _ in range(0, ITERATE_OVER_TRIPLETS):
             losses = []
@@ -241,12 +258,13 @@ def main():
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-
+        writer.add_scalar('data/train_triplet_loss', np.mean(losses),int( n_iter*1.0/ITERATE_OVER_TRIPLETS))
+        n_iter += 1  
         trn_losses_.append(np.mean(losses))
         logger.info('train loss: ', np.mean(losses))
 
         if epoch % 1 == 0:
-            acc_margin, acc_no_margin, loss = validate(tcn, use_cuda, args)
+            acc_margin, acc_no_margin, loss, n_valid_iter = validate(tcn, use_cuda, n_valid_iter)
             val_losses_.append(loss)
             val_acc_margin_.append(acc_margin)
             val_acc_no_margin_.append(acc_no_margin)

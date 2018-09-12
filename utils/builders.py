@@ -90,6 +90,7 @@ class SingleViewTripletBuilder(object):
     def build_set(self):
         triplets = []
         triplets = torch.Tensor(self.sample_size, 3, 3, *self.frame_size)
+        # print("Create triplets from {}".format(self.video_paths[self.video_index]))
         for i in range(0, self.sample_size):
             snap = self.get_video(self.video_index)
             anchor_frame, positive_frame, negative_frame = self.sample_triplet(snap)
@@ -169,7 +170,7 @@ class SingleViewDepthTripletBuilder(SingleViewTripletBuilder):
             triplets[i, 0, :, :, :] = anchor_frame
             triplets[i, 1, :, :, :] = positive_frame
             triplets[i, 2, :, :, :] = negative_frame
-        print(self.video_index)
+        #print(self.video_index)
 
         self.video_index = (self.video_index + 1) % self.video_count
         # Second argument is labels. Not used.
