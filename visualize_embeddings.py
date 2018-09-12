@@ -27,8 +27,8 @@ sys.path.append(conf.TCN_PATH)
 from tcn import define_model as define_model # different model architectures - fix at some point bec$
 
 
-
-os.environ["CUDA_VISIBLE_DEVICES"]= "1,2"
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1, 2, 4"
 
 EXP_DIR = conf.EXP_DIR
 EXP_NAME = conf.EXP_NAME
