@@ -9,7 +9,6 @@ from torch import Tensor
 from torch.autograd import Variable
 import logging
 import nltk
-from vocabulary import Vocabulary
 import sys
 import matplotlib.pyplot as plt
 import pickle

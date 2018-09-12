@@ -16,6 +16,8 @@ import imageio
 from PIL import Image
 from pdb import set_trace
 
+from utils.builder_utils import time_stamped
+
 sys.path.append('/home/max/projects/gps-lfd')
 sys.path.append('/home/msieb/projects/gps-lfd')
 #from config import Config as Config # Import approriate config
@@ -97,11 +99,15 @@ def main(args):
     tcn = load_tcn_model(MODEL_PATH, use_cuda=USE_CUDA)
     # input_folder = join(INPUT_PATH, args.experiment_relative_path)
 
-    writer = SummaryWriter()
+    logdir = os.path.join('runs', MODEL_FOLDER, 'embeddings_viz', time_stamped()) 
+    print("logging to {}".format(logdir)) 
+    writer = SummaryWriter(logdir)
     image_buffer = []
     label_buffer = []
     feature_buffer = []
     for file in [ p for p in os.listdir(RGB_PATH) if p.endswith('.mp4') ]:
+        if file.strip('_')[0] != '0':
+            continue
         print("Processing ", file)
         reader = imageio.get_reader(join(RGB_PATH, file))
         reader_depth = imageio.get_reader(join(DEPTH_PATH, file))
@@ -123,7 +129,9 @@ def main(args):
             embeddings[i, :] = output_unnormalized.detach().cpu().numpy()
             embeddings_normalized[i, :] = output_normalized.detach().cpu().numpy()
             i += 1
-            label_buffer.append(int(file.split('_')[0]))
+            # label_buffer.append(int(file.split('_')[0])) # video sequence label
+            label_buffer.append(int(file.split('view')[1].split('.mp4')[0])) # view label
+                                                        
         feature_buffer.append(embeddings_normalized)
         
     print('generate embedding')
@@ -132,6 +140,7 @@ def main(args):
     label = torch.Tensor(np.asarray(label_buffer))
     images = torch.Tensor(np.transpose(np.asarray(image_buffer)/255.0, [0, 3, 1, 2]))
     writer.add_embedding(features, metadata=label, label_img=images)
+    
     print("=" * 10)
     
     print('Exit function')

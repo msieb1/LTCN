@@ -41,7 +41,7 @@ EXP_NAME = 'duck/'
 #EXP_DIR = os.path.join('/home/msieb/data/tcn_data/experiments', EXP_NAME)
 EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
 
-MODEL_FOLDER = 'mftcn-rgb-mv'
+MODEL_FOLDER = 'mftcn-rgb-sv'
 SAMPLE_SIZE = 100
 builder = SingleViewTripletBuilder
 logdir = os.path.join('runs', time_stamped()) 
