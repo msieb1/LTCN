@@ -6,7 +6,7 @@ from torch.autograd import Function
 import torchvision.models as models
 from torch.nn.utils.rnn import pack_padded_sequence
 from copy import deepcopy as copy
-from ipdb import set_trace
+from pdb import set_trace
 
 VOCAB_SIZE = 2
 

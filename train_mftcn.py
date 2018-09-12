@@ -41,10 +41,11 @@ EXP_NAME = 'duck/'
 #EXP_DIR = os.path.join('/home/msieb/data/tcn_data/experiments', EXP_NAME)
 EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
 
-MODEL_FOLDER = 'mftcn-rgb-sv'
+MODEL_FOLDER = 'mftcn-rgb-mv'
+
 SAMPLE_SIZE = 100
 builder = SingleViewTripletBuilder
-logdir = os.path.join('runs', time_stamped()) 
+logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
 
@@ -92,7 +93,7 @@ def get_args():
 
 args = get_args()
 print(args)
-builder = MultiViewMultiFrameTripletBuilder
+builder = SingleViewMultiFrameTripletBuilder
 n_prev_frames = 3
 logger = Logger(args.log_file)
 
