@@ -46,7 +46,7 @@ MODEL_FOLDER = 'tcn-rgb-sv'
 
 SAMPLE_SIZE = 100
 builder = SingleViewTripletBuilder
-logdir = os.path.join('runs', time_stamped()) 
+logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
 
