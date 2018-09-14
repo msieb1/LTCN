@@ -35,6 +35,7 @@ os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1, 2, 4"
 EXP_DIR = conf.EXP_DIR
 EXP_NAME = conf.EXP_NAME
 MODE = conf.MODE
+MODE = 'test_rot'
 MODEL_FOLDER = conf.MODEL_FOLDER
 MODEL_NAME = conf.MODEL_NAME
 MODEL_PATH = join(EXP_DIR, EXP_NAME, 'trained_models',MODEL_FOLDER, MODEL_NAME)
@@ -56,6 +57,8 @@ IMAGE_SIZE = conf.IMAGE_SIZE_RESIZED
 FPS = conf.FPS
 dt = 1/FPS
 USE_CUDA = conf.USE_CUDA
+SELECTED_SEQS = conf.SELECTED_SEQS
+print(SELECTED_SEQS)
 
 def resize_frame(frame, out_size):
     image = Image.fromarray(frame)
@@ -105,18 +108,26 @@ def main(args):
     image_buffer = []
     label_buffer = []
     feature_buffer = []
+    j = 0
     for file in [ p for p in os.listdir(RGB_PATH) if p.endswith('.mp4') ]:
-        if file.strip('_')[0] != '0':
+        if SELECTED_SEQS is not None and file.split('_')[0] not in SELECTED_SEQS:    
             continue
+        #if file.split('view')[1].split('.mp4')[0] not in ['0']:
+        #    continue
         print("Processing ", file)
         reader = imageio.get_reader(join(RGB_PATH, file))
         reader_depth = imageio.get_reader(join(DEPTH_PATH, file))
 
         embeddings = np.zeros((len(reader), EMBEDDING_DIM))
         embeddings_normalized = np.zeros((len(reader), EMBEDDING_DIM))
+        embeddings_episode_buffer = []
+        embeddings_normalized_episode_buffer = []
 
         i = 0
         for im, im_depth in zip(reader, reader_depth):
+            i += 1
+            if i % 5 != 0:
+                continue
             image_buffer.append(im)
             resized_image = resize_frame(im, IMAGE_SIZE)[None, :]
             resized_depth = resize_frame(im_depth, IMAGE_SIZE)[None, :]
@@ -126,16 +137,17 @@ def main(args):
               output_normalized, output_unnormalized, _ = tcn(torch.Tensor(frame[None, :]).cuda())
             else:
               output_normalized, output_unnormalized, _ = tcn(torch.Tensor(frame[None, :]))         
-            embeddings[i, :] = output_unnormalized.detach().cpu().numpy()
-            embeddings_normalized[i, :] = output_normalized.detach().cpu().numpy()
-            i += 1
-            # label_buffer.append(int(file.split('_')[0])) # video sequence label
-            label_buffer.append(int(file.split('view')[1].split('.mp4')[0])) # view label
-                                                        
-        feature_buffer.append(embeddings_normalized)
-        
+            embeddings_episode_buffer.append(output_unnormalized.detach().cpu().numpy())
+            embeddings_normalized_episode_buffer.append(output_normalized.detach().cpu().numpy())
+            label_buffer.append(int(file.split('_')[0])) # video sequence label
+            #label_buffer.append(int(file.split('view')[1].split('.mp4')[0])) # view label
+            #label_buffer.append(i) # view label
+        feature_buffer.append(np.array(embeddings_normalized_episode_buffer))
+        j += 1
+        if j > 30:
+            break
     print('generate embedding')
-    feature_buffer = np.array(feature_buffer)
+    feature_buffer = np.squeeze(np.array(feature_buffer))
     features = torch.Tensor(np.reshape(np.array(feature_buffer), [feature_buffer.shape[0]*feature_buffer.shape[1], feature_buffer.shape[2]]))
     label = torch.Tensor(np.asarray(label_buffer))
     images = torch.Tensor(np.transpose(np.asarray(image_buffer)/255.0, [0, 3, 1, 2]))

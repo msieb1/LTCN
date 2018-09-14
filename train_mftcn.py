@@ -16,7 +16,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
 from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, \
 MultiViewTripletBuilder, SingleViewMultiFrameTripletBuilder, MultiViewMultiFrameTripletBuilder
-from utils.builder_utils import distance, Logger, ensure_folder, collate_fn
+from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped
 from utils.vocabulary import Vocabulary
 from mftcn import define_model
 from ipdb import set_trace
@@ -44,7 +44,7 @@ EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAM
 MODEL_FOLDER = 'mftcn-rgb-mv'
 
 SAMPLE_SIZE = 100
-builder = SingleViewTripletBuilder
+builder = SingleViewMultiFrameTripletBuilder
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
@@ -62,8 +62,8 @@ def get_args():
 
     parser.add_argument('--validation-directory', type=str, default=EXP_DIR + 'videos/valid/')
 
-    parser.add_argument('--minibatch-size', type=int, default=2)
-    parser.add_argument('--margin', type=float, default=2.0)
+    parser.add_argument('--minibatch-size', type=int, default=4)
+    parser.add_argument('--margin', type=float, default=4.0)
     parser.add_argument('--model-name', type=str, default='tcn-no-labels-mv')
     parser.add_argument('--log-file', type=str, default='./out.log')
     parser.add_argument('--lr-start', type=float, default=0.001)
@@ -100,7 +100,8 @@ logger = Logger(args.log_file)
 def batch_size(epoch, max_size):
     exponent = epoch // 100
     return min(max(2 ** (exponent), 2), max_size)
-validation_builder = builder(args.n_views, n_prev_frames, args.validation_directory, IMAGE_SIZE, args, sample_size=5)
+
+validation_builder = builder(args.n_views, n_prev_frames, args.validation_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
 validation_set = [validation_builder.build_set() for i in range(5)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
@@ -109,7 +110,7 @@ def validate(tcn, use_cuda, args):
     # Run model on validation data and log results
     data_loader = DataLoader(
                     validation_set, 
-                    batch_size=32, 
+                    batch_size=4, 
                     shuffle=False, 
                     pin_memory=use_cuda,
                     )
@@ -194,7 +195,7 @@ def main():
     tcn = create_model(use_cuda)
     tcn = torch.nn.DataParallel(tcn, device_ids=range(torch.cuda.device_count()))
     triplet_builder = builder(args.n_views, n_prev_frames, \
-        args.train_directory, IMAGE_SIZE, args, sample_size=20)
+        args.train_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
 
     queue = multiprocessing.Queue(1)
     dataset_builder_process = multiprocessing.Process(target=build_set, args=(queue, triplet_builder, logger), daemon=True)
@@ -229,7 +230,7 @@ def main():
 
         for _ in range(0, ITERATE_OVER_TRIPLETS):
             losses = []
-
+            set_trace()
             for minibatch, _ in data_loader:
                 # frames = Variable(minibatch)
                 if use_cuda:
@@ -248,6 +249,7 @@ def main():
 
                 loss_triplet = torch.clamp(args.margin + d_positive - d_negative, min=0.0).mean()
                 loss = loss_triplet
+                print(loss)
                 losses.append(loss.data.cpu().numpy())
 
 

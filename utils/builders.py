@@ -252,7 +252,6 @@ class SingleViewDepthTripletBuilder(SingleViewTripletBuilder):
             positive_frame = np.concatenate([snap[positive_index], snap_depth[positive_index][None, 0]], axis=0)
             negative_frame = np.concatenate([snap[negative_index], snap_depth[negative_index][None, 0]], axis=0)
         except:
-            set_trace()
             print(self.video_index)
             print(len(snap))
             print(len(snap_depth))
@@ -649,15 +648,16 @@ class SingleViewDepthTripletExtractedBuilder(SingleViewDepthTripletBuilder):
 class SingleViewMultiFrameTripletBuilder(object):
     def __init__(self, view, n_prev_frames, video_directory, image_size, cli_args, sample_size=500):
         self.frame_size = image_size
-        self.view = views
+        self.view = view
         self.n_prev_frames = n_prev_frames
         self._read_video_dir(video_directory)
         self._count_frames()
         # The negative example has to be from outside the buffer window. Taken from both sides of
         # ihe frame.
-        self.negative_frame_margin = 5 
+        self.negative_frame_margin = 10 
         self.cli_args = cli_args
         self.sample_size = sample_size
+        self.video_index = 0
 
     def _read_video_dir(self, video_directory):
         self._video_directory = video_directory
@@ -677,11 +677,8 @@ class SingleViewMultiFrameTripletBuilder(object):
             self.cumulative_lengths[i] = prev + frames
 
     @functools.lru_cache(maxsize=1)
-    def get_videos(self, index):
-        views = []
-        for i in range(self.n_views):
-            views.append(read_video(self.video_paths[index + i], self.frame_size))
-        return views
+    def get_video(self, index):
+        return read_video(self.video_paths[index], self.frame_size)
 
     def sample_triplet(self, snaps):
         loaded_sample = False
@@ -706,21 +703,22 @@ class SingleViewMultiFrameTripletBuilder(object):
         positive_frame[0] = snaps[positive_index]
         negative_frame[0] = snaps[negative_index]
         
-        for ii in range(self.n_prev_frames):
+        for ii in range(1, self.n_prev_frames+1):
             
             anchor_frame[ii] = snaps[anchor_index-ii]
             positive_frame[ii] = snaps[positive_index-ii]
             negative_frame[ii] = snaps[negative_index-ii]
 
-
+        set_trace()
         return (torch.Tensor(anchor_frame), torch.Tensor(positive_frame),
             torch.Tensor(negative_frame))
 
     def build_set(self):
         triplets = []
         triplets = torch.Tensor(self.sample_size, self.n_prev_frames + 1, 3, 3, *self.frame_size)
+        #print(self.video_paths[self.video_index])
         for i in range(0, self.sample_size):
-            snaps = self.get_videos(self.video_index)
+            snaps = self.get_video(self.video_index)
             anchor_frame, positive_frame, negative_frame = self.sample_triplet(snaps)
             triplets[i, :, 0, :, :, :] = anchor_frame
             triplets[i, :, 1, :, :, :] = positive_frame
@@ -817,8 +815,8 @@ class MultiViewMultiFrameTripletBuilder(object):
         positive_frame[0] = snaps[positive_view][positive_index]
         negative_frame[0] = snaps[negative_view][negative_index]
         
-        for ii in range(self.n_prev_frames):
-            
+        for ii in range(1, self.n_prev_frames+1):
+              
             anchor_frame[ii] = snaps[anchor_view][anchor_index-ii]
             positive_frame[ii] = snaps[positive_view][positive_index-ii]
             negative_frame[ii] = snaps[negative_view][negative_index-ii]
