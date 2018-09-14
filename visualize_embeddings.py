@@ -35,7 +35,6 @@ os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1, 2, 4"
 EXP_DIR = conf.EXP_DIR
 EXP_NAME = conf.EXP_NAME
 MODE = conf.MODE
-MODE = 'test_rot'
 MODEL_FOLDER = conf.MODEL_FOLDER
 MODEL_NAME = conf.MODEL_NAME
 MODEL_PATH = join(EXP_DIR, EXP_NAME, 'trained_models',MODEL_FOLDER, MODEL_NAME)

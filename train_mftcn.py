@@ -29,22 +29,27 @@ from tensorboardX import SummaryWriter
 
 from utils.plot_utils import plot_mean
 
+sys.path.append('/home/max/projects/gps-lfd') 
+sys.path.append('/home/msieb/projects/gps-lfd')
+from config import Config_Isaac_Server as Config # Import approriate config
+conf = Config()
 
-IMAGE_SIZE = (299, 299)
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1,2,3"
 
 ITERATE_OVER_TRIPLETS = 3 
 
-EXP_NAME = 'duck/'
+IMAGE_SIZE = conf.IMAGE_SIZE
+EXP_NAME = conf.EXP_NAME
 
 #EXP_DIR = os.path.join('/home/msieb/data/tcn_data/experiments', EXP_NAME)
-EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
+#EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
+EXP_DIR = conf.EXP_DIR
 
-MODEL_FOLDER = 'mftcn-rgb-mv'
+MODEL_FOLDER = conf.MODEL_FOLDER
 
 SAMPLE_SIZE = 100
-builder = SingleViewMultiFrameTripletBuilder
+builder = MultiViewMultiFrameTripletBuilder
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
@@ -54,7 +59,7 @@ def get_args():
     parser.add_argument('--start-epoch', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--save-every', type=int, default=5)
-    parser.add_argument('--model-folder', type=str, default=EXP_DIR + 'trained_models/' + MODEL_FOLDER)
+    parser.add_argument('--model-folder', type=str, default=EXP_DIR + 'trained_models/' + MODEL_FOLDER, time_stamped())
     parser.add_argument('--load-model', type=str, required=False)
     # parser.add_argument('--train-directory', type=str, default='./data/multiview-pouring/train/')
     # parser.add_argument('--validation-directory', type=str, default='./data/multiview-pouring/val/')
@@ -154,7 +159,7 @@ def validate(tcn, use_cuda, args):
     return correct_with_margin, correct_without_margin, loss 
 
 def model_filename(model_name, epoch):
-    return "{model_name}-epoch-{epoch}.pk".format(model_name=model_name, epoch=epoch)
+    return "epoch-{epoch}.pk".format(model_name=model_name, epoch=epoch)
 
 def save_model(model, filename, model_folder):
     ensure_folder(model_folder)
@@ -239,6 +244,8 @@ def main():
                 anchor_frames = frames[:, :, 0, :, :, :]
                 positive_frames = frames[:, :, 1, :, :, :]
                 negative_frames = frames[:, :, 2, :, :, :]
+                
+                
 
                 anchor_output, unnormalized, _ = tcn(anchor_frames)
                 positive_output, _, _ = tcn(positive_frames)
@@ -246,7 +253,7 @@ def main():
 
                 d_positive = distance(anchor_output, positive_output)
                 d_negative = distance(anchor_output, negative_output)
-
+            
                 loss_triplet = torch.clamp(args.margin + d_positive - d_negative, min=0.0).mean()
                 loss = loss_triplet
                 print(loss)

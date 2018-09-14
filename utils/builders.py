@@ -200,7 +200,9 @@ class MultiViewTripletBuilder(object):
             triplets[i, 0, :, :, :] = anchor_frame
             triplets[i, 1, :, :, :] = positive_frame
             triplets[i, 2, :, :, :] = negative_frame
+
         self.sequence_index = (self.sequence_index + 1) % self.sequence_count
+        
         # Second argument is labels. Not used.
         return TensorDataset(triplets, torch.zeros(triplets.size()[0]))
 

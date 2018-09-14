@@ -27,9 +27,14 @@ import torchvision.utils as vutils
 import torchvision.models as models
 from torchvision import datasets
 from tensorboardX import SummaryWriter
+import matplotlib.pyplot as plt
 
 from utils.plot_utils import plot_mean
 
+isys.path.append('/home/max/projects/gps-lfd') 
+sys.path.append('/home/msieb/projects/gps-lfd')
+from config import Config_Isaac_Server as Config # Import approriate config
+conf = Config()
 
 IMAGE_SIZE = (299, 299)
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
@@ -37,15 +42,15 @@ os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1,2,3"
 
 ITERATE_OVER_TRIPLETS = 3 
 
-EXP_NAME = 'duck/'
+EXP_NAME = conf.EXP_NAME
 
 #EXP_DIR = os.path.join('/home/msieb/data/tcn_data/experiments', EXP_NAME)
-EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
-
-MODEL_FOLDER = 'tcn-rgb-sv'
+#EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
+EXP_DIR = conf.EXP_DIR
+MODEL_FOLDER = conf.MODEL_FOLDER
 
 SAMPLE_SIZE = 100
-builder = SingleViewTripletBuilder
+builder = MultiViewTripletBuilder
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
@@ -101,7 +106,7 @@ def batch_size(epoch, max_size):
     exponent = epoch // 100
     return min(max(2 ** (exponent), 2), max_size)
 validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
-validation_set = [validation_builder.build_set() for i in range(5)]
+validation_set = [validation_builder.build_set() for i in range(6)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
 
@@ -110,7 +115,7 @@ def validate(tcn, use_cuda, n_calls):
     # Run model on validation data and log results
     data_loader = DataLoader(
                     validation_set, 
-                    batch_size=32, 
+                    batch_size=16, 
                     shuffle=False, 
                     pin_memory=use_cuda,
                     )
@@ -130,7 +135,7 @@ def validate(tcn, use_cuda, n_calls):
         anchor_output, unnormalized, _ = tcn(anchor_frames)
         positive_output, _, _ = tcn(positive_frames)
         negative_output, _, _ = tcn(negative_frames)
-
+        
         d_positive = distance(anchor_output, positive_output)
         d_negative = distance(anchor_output, negative_output)
 
@@ -143,6 +148,8 @@ def validate(tcn, use_cuda, n_calls):
         loss = loss_triplet
         losses.append(loss.data.cpu().numpy())
     writer.add_scalar('data/validation_loss', np.mean(losses), n_calls) 
+    writer.add_scalar('data/validation_correct_with_margin', correct_with_margin / len(validation_set), n_calls)
+    writer.add_scalar('data/validation_correct_without_margin', correct_without_margin / len(validation_set), n_calls)
     n_calls += 1
     loss = np.mean(losses)
     logger.info('val loss: ',loss)
@@ -167,7 +174,7 @@ def save_model(model, filename, model_folder):
 def build_set(queue, triplet_builder, log):
     while 1:
         datasets = []
-        for i in range(5):
+        for i in range(10):
             dataset = triplet_builder.build_set()
             datasets.append(dataset)
         dataset = ConcatDataset(datasets)
@@ -242,7 +249,14 @@ def main():
                 anchor_frames = frames[:, 0, :, :, :]
                 positive_frames = frames[:, 1, :, :, :]
                 negative_frames = frames[:, 2, :, :, :]
-
+        
+                plt.imshow(np.transpose(anchor_frames[0, :,:,:], [1,2,0]))
+                plt.figure()
+                plt.imshow(np.transpose(positive_frames[0, :,:,:], [1,2,0]))
+                plt.figure()
+                plt.imshow(np.transpose(negative_frames[0, :,:,:], [1,2,0]))
+                #set_trace()
+                #plt.show()
                 anchor_output, unnormalized, _ = tcn(anchor_frames)
                 positive_output, _, _ = tcn(positive_frames)
                 negative_output, _, _ = tcn(negative_frames)
@@ -258,7 +272,7 @@ def main():
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-        writer.add_scalar('data/train_triplet_loss', np.mean(losses),int( n_iter*1.0/ITERATE_OVER_TRIPLETS))
+        writer.add_scalar('data/train_triplet_loss', np.mean(losses), n_iter)
         n_iter += 1  
         trn_losses_.append(np.mean(losses))
         logger.info('train loss: ', np.mean(losses))
