@@ -1,6 +1,7 @@
 import matplotlib
 matplotlib.use('Agg')
 import os
+from os.path import join
 import argparse
 import torch
 import numpy as np
@@ -15,10 +16,10 @@ from torch import multiprocessing
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder, SingleViewTripletBuilder
+from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder, SingleViewTripletBuilder, PoseMultiViewTripletBuilder
 from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped
 from utils.vocabulary import Vocabulary
-from tcn import define_model
+from pose_tcn import define_model
 from ipdb import set_trace
 from sklearn.preprocessing import OneHotEncoder
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
@@ -31,7 +32,7 @@ import matplotlib.pyplot as plt
 
 from utils.plot_utils import plot_mean
 
-isys.path.append('/home/max/projects/gps-lfd') 
+sys.path.append('/home/max/projects/gps-lfd') 
 sys.path.append('/home/msieb/projects/gps-lfd')
 from config import Config_Isaac_Server as Config # Import approriate config
 conf = Config()
@@ -40,7 +41,7 @@ IMAGE_SIZE = (299, 299)
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1,2,3"
 
-ITERATE_OVER_TRIPLETS = 3 
+ITERATE_OVER_TRIPLETS = 1 
 
 EXP_NAME = conf.EXP_NAME
 
@@ -49,8 +50,9 @@ EXP_NAME = conf.EXP_NAME
 EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 
+N_VIEWS = conf.N_VIEWS
 SAMPLE_SIZE = 100
-builder = MultiViewTripletBuilder
+builder = PoseMultiViewTripletBuilder
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
@@ -60,21 +62,21 @@ def get_args():
     parser.add_argument('--start-epoch', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--save-every', type=int, default=5)
-    parser.add_argument('--model-folder', type=str, default=EXP_DIR + 'trained_models/' + MODEL_FOLDER, time_stamped())
+    parser.add_argument('--model-folder', type=str, default=join(EXP_DIR, 'trained_models', MODEL_FOLDER, time_stamped()))
     parser.add_argument('--load-model', type=str, required=False)
     # parser.add_argument('--train-directory', type=str, default='./data/multiview-pouring/train/')
     # parser.add_argument('--validation-directory', type=str, default='./data/multiview-pouring/val/')
-    parser.add_argument('--train-directory', type=str, default=EXP_DIR + 'videos/train/')
+    parser.add_argument('--train-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/train/'))
 
-    parser.add_argument('--validation-directory', type=str, default=EXP_DIR + 'videos/valid/')
+    parser.add_argument('--validation-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/valid/'))
 
     parser.add_argument('--minibatch-size', type=int, default=16)
     parser.add_argument('--margin', type=float, default=2.0)
-    parser.add_argument('--model-name', type=str, default='tcn-no-labels-mv')
+    parser.add_argument('--model-name', type=str, default='tcn')
     parser.add_argument('--log-file', type=str, default='./out.log')
     parser.add_argument('--lr-start', type=float, default=0.001)
     parser.add_argument('--triplets-from-videos', type=int, default=5)
-    parser.add_argument('--n-views', type=int, default=3)
+    parser.add_argument('--n-views', type=int, default=N_VIEWS)
     parser.add_argument('--alpha', type=float, default=0.001, help='weighing factor of language loss to triplet loss')
 
 
@@ -106,9 +108,11 @@ def batch_size(epoch, max_size):
     exponent = epoch // 100
     return min(max(2 ** (exponent), 2), max_size)
 validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
-validation_set = [validation_builder.build_set() for i in range(6)]
+validation_set = [validation_builder.build_set() for i in range(2)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
+
+
 
 
 def validate(tcn, use_cuda, n_calls):
@@ -122,19 +126,26 @@ def validate(tcn, use_cuda, n_calls):
     correct_with_margin = 0
     correct_without_margin = 0
     losses = []
-    for minibatch, _ in data_loader:
+    losses_triplet = []
+    losses_pose = []
+    
+    for minibatch in data_loader:
         # frames = Variable(minibatch, require_grad=False)
 
         if use_cuda:
-            frames = minibatch.cuda()
+            frames = minibatch[0].cuda()
+            poses = minibatch[1].cuda()
 
         anchor_frames = frames[:, 0, :, :, :]
         positive_frames = frames[:, 1, :, :, :]
         negative_frames = frames[:, 2, :, :, :]
+        anchor_pose = poses[:, 0,  :]
+        positive_pose = poses [:, 1, :]
+        negative_pose = poses[:, 2, :]
 
-        anchor_output, unnormalized, _ = tcn(anchor_frames)
-        positive_output, _, _ = tcn(positive_frames)
-        negative_output, _, _ = tcn(negative_frames)
+        anchor_output, unnormalized, anchor_pose = tcn(anchor_frames)
+        positive_output, _, positive_pose = tcn(positive_frames)
+        negative_output, _, negative_pose = tcn(negative_frames)
         
         d_positive = distance(anchor_output, positive_output)
         d_negative = distance(anchor_output, negative_output)
@@ -143,13 +154,21 @@ def validate(tcn, use_cuda, n_calls):
 
         correct_with_margin += ((d_positive + args.margin) < d_negative).data.cpu().numpy().sum()
         correct_without_margin += (d_positive < d_negative).data.cpu().numpy().sum()
-
         loss_triplet = torch.clamp(args.margin + d_positive - d_negative, min=0.0).mean()
-        loss = loss_triplet
+        loss_pose = (torch.nn.MSELoss(anchor_pose_pred, anchor_pose) + \
+                    torch.nn.MSELoss(negative_pose_pred, negative_pose) + \
+                    torch.nn.MSELoss(positive_pose_pred, positive_pose)) / 3  
+        loss = loss_triplet + loss_pose
         losses.append(loss.data.cpu().numpy())
-    writer.add_scalar('data/validation_loss', np.mean(losses), n_calls) 
-    writer.add_scalar('data/validation_correct_with_margin', correct_with_margin / len(validation_set), n_calls)
-    writer.add_scalar('data/validation_correct_without_margin', correct_without_margin / len(validation_set), n_calls)
+        losses_triplet.append(loss_triplet.data.cpu().numpy())
+        losses_pose.append(loss_pose.data.cpu().numpy())
+    
+
+    writer.add_scalar('data/valid_loss', np.mean(losses), n_iter)
+    writer.add_scalar('data/valid_triplet_loss', np.mean(losses_triplet), n_iter)
+    writer.add_scalar('data/valid_pose_loss', np.mean(losses_pose), n_iter)
+    writer.add_scalar('data/valid_correct_with_margin', correct_with_margin / len(validation_set), n_calls)
+    writer.add_scalar('data/valid_correct_without_margin', correct_without_margin / len(validation_set), n_calls)
     n_calls += 1
     loss = np.mean(losses)
     logger.info('val loss: ',loss)
@@ -174,7 +193,7 @@ def save_model(model, filename, model_folder):
 def build_set(queue, triplet_builder, log):
     while 1:
         datasets = []
-        for i in range(10):
+        for i in range(2):
             dataset = triplet_builder.build_set()
             datasets.append(dataset)
         dataset = ConcatDataset(datasets)
@@ -241,31 +260,45 @@ def main():
 
         for _ in range(0, ITERATE_OVER_TRIPLETS):
             losses = []
+            losses_triplet = []
+            losses_pose = []
+            for minibatch in data_loader:
+                # frames = Variable(minibatch, require_grad=False)
 
-            for minibatch, _ in data_loader:
-                # frames = Variable(minibatch)
                 if use_cuda:
-                    frames = minibatch.cuda()
+                    frames = minibatch[0].cuda()
+                    poses = minibatch[1].cuda()
+
                 anchor_frames = frames[:, 0, :, :, :]
                 positive_frames = frames[:, 1, :, :, :]
                 negative_frames = frames[:, 2, :, :, :]
-        
-                anchor_output, unnormalized, _ = tcn(anchor_frames)
-                positive_output, _, _ = tcn(positive_frames)
-                negative_output, _, _ = tcn(negative_frames)
+                anchor_pose = poses[:, 0,  :]
+                positive_pose = poses [:, 1, :]
+                negative_pose = poses[:, 2, :]
+
+                anchor_output, unnormalized, anchor_pose_pred = tcn(anchor_frames)
+                positive_output, _, positive_pose_pred = tcn(positive_frames)
+                negative_output, _, negative_pose_pred = tcn(negative_frames)
 
                 d_positive = distance(anchor_output, positive_output)
                 d_negative = distance(anchor_output, negative_output)
 
                 loss_triplet = torch.clamp(args.margin + d_positive - d_negative, min=0.0).mean()
-                loss = loss_triplet
+                loss_pose = (torch.nn.MSELoss(anchor_pose_pred, anchor_pose) + \
+                            torch.nn.MSELoss(negative_pose_pred, negative_pose) + \
+                            torch.nn.MSELoss(positive_pose_pred, positive_pose)) / 3  
+                loss = loss_triplet + loss_pose
                 losses.append(loss.data.cpu().numpy())
-
+                losses_triplet.append(loss_triplet.data.cpu().numpy())
+                losses_pose.append(loss_pose.data.cpu().numpy())
+            
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-        writer.add_scalar('data/train_triplet_loss', np.mean(losses), n_iter)
+        writer.add_scalar('data/train_loss', np.mean(losses), n_iter)
+        writer.add_scalar('data/train_triplet_loss', np.mean(losses_triplet), n_iter)
+        writer.add_scalar('data/train_pose_loss', np.mean(losses_pose), n_iter)
         n_iter += 1  
         trn_losses_.append(np.mean(losses))
         logger.info('train loss: ', np.mean(losses))

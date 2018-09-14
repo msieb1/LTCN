@@ -135,7 +135,7 @@ class MultiViewTripletBuilder(object):
         self._count_frames()
         # The negative example has to be from outside the buffer window. Taken from both sides of
         # ihe frame.
-        self.negative_frame_margin = 5 
+        self.negative_frame_margin = 10 
         self.sequence_index = 0
         self.cli_args = cli_args
         self.sample_size = sample_size
@@ -226,6 +226,69 @@ class MultiViewTripletBuilder(object):
 
     def sample_negative_frame_index(self, anchor_index):
         return np.random.choice(self.negative_frame_indices(anchor_index))
+
+class PoseMultiViewTripletBuilder(MultiViewTripletBuilder):
+    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500):
+        super(PoseMultiViewTripletBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size)
+    
+    @functools.lru_cache(maxsize=1)
+    def get_pose(self, index):
+        views = []
+        for i in range(self.n_views):
+            views.append(np.load(self.video_paths[index + i].split('.mp4')[0]+'.npy')[:, -4:])
+        return views
+
+    def sample_triplet(self, snaps, poses):
+        loaded_sample = False
+        while not loaded_sample:
+
+            try:
+                anchor_index = self.sample_anchor_frame_index()
+                positive_index = anchor_index
+                negative_index = self.sample_negative_frame_index(anchor_index)
+                loaded_sample = True
+            except:
+                pass
+                # print("Error loading video - sequence index: ", self.sequence_index)
+                # print("video lengths: ", [len(snaps[i]) for i in range(0, len(snaps))])
+                # print("Maybe margin too high")
+        # random sample anchor view,and positive view
+        view_set = set(range(self.n_views))
+        anchor_view = np.random.choice(np.array(list(view_set)))
+        view_set.remove(anchor_view)
+        positive_view = np.random.choice(np.array(list(view_set)))
+        negative_view = anchor_view # negative example comes from same view INQUIRE TODO
+
+        anchor_frame = snaps[anchor_view][anchor_index]
+        positive_frame = snaps[positive_view][positive_index]
+        negative_frame = snaps[negative_view][negative_index]
+        # what shape has pose? T x 7?
+        anchor_pose= poses[anchor_view][anchor_index]
+        positive_pose= poses[positive_view][positive_index]
+        negative_pose= poses[negative_view][negative_index]
+
+        return (torch.Tensor(anchor_frame), torch.Tensor(positive_frame),
+            torch.Tensor(negative_frame), torch.Tensor(anchor_pose), torch.Tensor(positive_pose), torch.Tensor(negative_pose))
+
+    def build_set(self):
+        triplets = []
+        triplets = torch.Tensor(self.sample_size, 3, 3, *self.frame_size)
+        pose_triplets = torch.Tensor(self.sample_size, 3, 4)
+        for i in range(0, self.sample_size):
+            snaps = self.get_videos(self.sequence_index * self.n_views)
+            poses = self.get_pose(self.sequence_index * self.n_views)
+            anchor_frame, positive_frame, negative_frame, \
+                       anchor_pose, positive_pose, negative_pose = self.sample_triplet(snaps, poses)
+            triplets[i, 0, :, :, :] = anchor_frame
+            triplets[i, 1, :, :, :] = positive_frame
+            triplets[i, 2, :, :, :] = negative_frame
+            pose_triplets[i, 0, :] = anchor_pose
+            pose_triplets[i, 1, :] = positive_pose
+            pose_triplets[i, 2, :] = negative_pose
+        self.sequence_index = (self.sequence_index + 1) % self.sequence_count
+        
+        # Second argument is labels. Not used.
+        return TensorDataset(triplets, pose_triplets)
 
 class SingleViewDepthTripletBuilder(SingleViewTripletBuilder):
     def __init__(self, view, video_directory, depth_video_directory, image_size, cli_args, sample_size=500):
