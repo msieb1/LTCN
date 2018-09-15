@@ -26,7 +26,7 @@ conf = Config()
 
 sys.path.append(conf.TCN_PATH)
 # from tcn import define_model_depth as define_model # different model architectures - fix at some p$
-from tcn import define_model as define_model # different model architectures - fix at some point bec$
+from pose_tcn import define_model as define_model # different model architectures - fix at some point bec$
 
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
@@ -50,13 +50,14 @@ parser.add_argument('--model-path', type=str, default=MODEL_PATH)
 parser.add_argument('--experiment-relative-path', type=str, default='tcn-no-depth-sv-full-frame/valid')
 
 
-EMBEDDING_DIM = conf.EMBEDDING_DIM
 T = conf.T
 IMAGE_SIZE = conf.IMAGE_SIZE_RESIZED
 FPS = conf.FPS
 dt = 1/FPS
 USE_CUDA = conf.USE_CUDA
 SELECTED_SEQS = conf.SELECTED_SEQS
+EMBEDDING_VIZ_VIEWS = conf.EMBEDDING_VIZ_VIEWS
+
 print(SELECTED_SEQS)
 
 def resize_frame(frame, out_size):
@@ -108,20 +109,21 @@ def main(args):
     label_buffer = []
     feature_buffer = []
     j = 0
-    for file in [ p for p in os.listdir(RGB_PATH) if p.endswith('.mp4') ]:
+    files = [ p for p in os.listdir(RGB_PATH) if p.endswith('.mp4') ]
+    files = sorted(files, key=lambda f: int(f.split('_')[0]))
+    for file in files:
         if SELECTED_SEQS is not None and file.split('_')[0] not in SELECTED_SEQS:    
             continue
-        #if file.split('view')[1].split('.mp4')[0] not in ['0']:
-        #    continue
+        if file.split('view')[1].split('.mp4')[0] not in EMBEDDING_VIZ_VIEWS:
+            continue
         print("Processing ", file)
         reader = imageio.get_reader(join(RGB_PATH, file))
         reader_depth = imageio.get_reader(join(DEPTH_PATH, file))
 
-        embeddings = np.zeros((len(reader), EMBEDDING_DIM))
-        embeddings_normalized = np.zeros((len(reader), EMBEDDING_DIM))
+        embeddings = np.zeros((len(reader), 4))
         embeddings_episode_buffer = []
-        embeddings_normalized_episode_buffer = []
-
+        poses = np.load(join(RGB_PATH, file.split('.mp4')[0]+'.npy'))[:, -4:]  
+        
         i = 0
         for im, im_depth in zip(reader, reader_depth):
             i += 1
@@ -136,14 +138,14 @@ def main(args):
               output_normalized, output_unnormalized, pose_output = tcn(torch.Tensor(frame[None, :]).cuda())
             else:
               output_normalized, output_unnormalized, pose_output = tcn(torch.Tensor(frame[None, :]))         
-            embeddings_episode_buffer.append(output_unnormalized.detach().cpu().numpy())
-            embeddings_normalized_episode_buffer.append(output_normalized.detach().cpu().numpy())
-            label_buffer.append(int(file.split('_')[0])) # video sequence label
-            #label_buffer.append(int(file.split('view')[1].split('.mp4')[0])) # view label
+            embeddings_episode_buffer.append(pose_output.detach().cpu().numpy())
+            #label_buffer.append(int(file.split('_')[0])) # video sequence label
+            #label_buffer.append(poses[i-1]) # video sequence label
+            label_buffer.append(np.concatenate([poses[i-1],np.array(int(file.split('view')[1].split('.mp4')[0]))[None]])) 
             #label_buffer.append(i) # view label
-        feature_buffer.append(np.array(embeddings_normalized_episode_buffer))
+        feature_buffer.append(np.array(embeddings_episode_buffer))
         j += 1
-        if j > 30:
+        if j >= 6:
             break
     print('generate embedding')
     feature_buffer = np.squeeze(np.array(feature_buffer))

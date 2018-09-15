@@ -61,7 +61,10 @@ def write_video(file_name, path, frames):
     imageio.mimwrite(os.path.join(path, file_name), frames, fps=60)
 
 def read_video(filepath, frame_size):
-    imageio_video = imageio.read(filepath)
+    try:
+        imageio_video = imageio.read(filepath)
+    except:
+        print("error loading video file, name: {}".format(filepath))
     snap_length = len(imageio_video) 
     frames = np.zeros((snap_length, 3, *frame_size))
     resized = map(lambda frame: resize_frame(frame, frame_size), imageio_video)

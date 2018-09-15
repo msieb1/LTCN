@@ -1,6 +1,7 @@
 import matplotlib
 matplotlib.use('Agg')
 import os
+from os.path import join
 import argparse
 import torch
 import numpy as np
@@ -15,10 +16,10 @@ from torch import multiprocessing
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.builders import SingleViewDepthTripletBuilder, MultiViewDepthTripletBuilder, MultiViewTripletBuilder, SingleViewTripletBuilder
+from utils.builders import SingleViewPoseBuilder 
 from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped
 from utils.vocabulary import Vocabulary
-from tcn import define_model
+from pose_tcn import define_model
 from ipdb import set_trace
 from sklearn.preprocessing import OneHotEncoder
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
@@ -31,7 +32,7 @@ import matplotlib.pyplot as plt
 
 from utils.plot_utils import plot_mean
 
-isys.path.append('/home/max/projects/gps-lfd') 
+sys.path.append('/home/max/projects/gps-lfd') 
 sys.path.append('/home/msieb/projects/gps-lfd')
 from config import Config_Isaac_Server as Config # Import approriate config
 conf = Config()
@@ -49,8 +50,10 @@ EXP_NAME = conf.EXP_NAME
 EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 
+USE_CUDA = conf.USE_CUDA
+NUM_VIEWS = conf.NUM_VIEWS
 SAMPLE_SIZE = 100
-builder = MultiViewTripletBuilder
+builder = SingleViewPoseBuilder 
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
@@ -60,21 +63,21 @@ def get_args():
     parser.add_argument('--start-epoch', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--save-every', type=int, default=5)
-    parser.add_argument('--model-folder', type=str, default=EXP_DIR + '/'+EXP_NAME+'/'+ 'trained_models/' + MODEL_FOLDER, time_stamped())
+    parser.add_argument('--model-folder', type=str, default=join(EXP_DIR, EXP_NAME,'trained_models', MODEL_FOLDER, time_stamped()))
     parser.add_argument('--load-model', type=str, required=False)
     # parser.add_argument('--train-directory', type=str, default='./data/multiview-pouring/train/')
     # parser.add_argument('--validation-directory', type=str, default='./data/multiview-pouring/val/')
-    parser.add_argument('--train-directory', type=str, default=EXP_DIR + 'videos/train/')
+    parser.add_argument('--train-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/train/'))
 
-    parser.add_argument('--validation-directory', type=str, default=EXP_DIR + 'videos/valid/')
+    parser.add_argument('--validation-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/valid/'))
 
     parser.add_argument('--minibatch-size', type=int, default=16)
     parser.add_argument('--margin', type=float, default=2.0)
-    parser.add_argument('--model-name', type=str, default='tcn-no-labels-mv')
+    parser.add_argument('--model-name', type=str, default='tcn')
     parser.add_argument('--log-file', type=str, default='./out.log')
-    parser.add_argument('--lr-start', type=float, default=0.001)
+    parser.add_argument('--lr-start', type=float, default=0.01)
     parser.add_argument('--triplets-from-videos', type=int, default=5)
-    parser.add_argument('--n-views', type=int, default=3)
+    parser.add_argument('--n-views', type=int, default=NUM_VIEWS)
     parser.add_argument('--alpha', type=float, default=0.001, help='weighing factor of language loss to triplet loss')
 
 
@@ -105,11 +108,21 @@ logger = Logger(args.log_file)
 def batch_size(epoch, max_size):
     exponent = epoch // 100
     return min(max(2 ** (exponent), 2), max_size)
-validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
-validation_set = [validation_builder.build_set() for i in range(6)]
+validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=int(SAMPLE_SIZE/2.0))
+validation_set = [validation_builder.build_set() for i in range(5)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
 
+
+
+def loss_fn(tcn, minibatch):
+    if USE_CUDA:
+       anchor_frames = minibatch[0].cuda()
+       anchor_poses = minibatch[1].cuda()
+    anchor_output, unnormalized, anchor_pose_pred = tcn(anchor_frames)
+    print(anchor_pose_predprint(anchor_pose_pred))
+    loss = torch.nn.MSELoss()(anchor_pose_pred, anchor_poses) 
+    return loss
 
 def validate(tcn, use_cuda, n_calls):
     # Run model on validation data and log results
@@ -119,48 +132,19 @@ def validate(tcn, use_cuda, n_calls):
                     shuffle=False, 
                     pin_memory=use_cuda,
                     )
-    correct_with_margin = 0
-    correct_without_margin = 0
     losses = []
-    for minibatch, _ in data_loader:
+    
+    for minibatch in data_loader:
         # frames = Variable(minibatch, require_grad=False)
-
-        if use_cuda:
-            frames = minibatch.cuda()
-
-        anchor_frames = frames[:, 0, :, :, :]
-        positive_frames = frames[:, 1, :, :, :]
-        negative_frames = frames[:, 2, :, :, :]
-
-        anchor_output, unnormalized, _ = tcn(anchor_frames)
-        positive_output, _, _ = tcn(positive_frames)
-        negative_output, _, _ = tcn(negative_frames)
-        
-        d_positive = distance(anchor_output, positive_output)
-        d_negative = distance(anchor_output, negative_output)
-
-        assert(d_positive.size()[0] == minibatch.size()[0])
-
-        correct_with_margin += ((d_positive + args.margin) < d_negative).data.cpu().numpy().sum()
-        correct_without_margin += (d_positive < d_negative).data.cpu().numpy().sum()
-
-        loss_triplet = torch.clamp(args.margin + d_positive - d_negative, min=0.0).mean()
-        loss = loss_triplet
+        loss = loss_fn(tcn, minibatch)
         losses.append(loss.data.cpu().numpy())
-    writer.add_scalar('data/validation_loss', np.mean(losses), n_calls) 
-    writer.add_scalar('data/validation_correct_with_margin', correct_with_margin / len(validation_set), n_calls)
-    writer.add_scalar('data/validation_correct_without_margin', correct_without_margin / len(validation_set), n_calls)
+
+    writer.add_scalar('data/valid_loss', np.mean(losses), n_calls)
     n_calls += 1
     loss = np.mean(losses)
     logger.info('val loss: ',loss)
 
-    message = "Validation score correct with margin {with_margin}/{total} and without margin {without_margin}/{total}".format(
-        with_margin=correct_with_margin,
-        without_margin=correct_without_margin,
-        total=len(validation_set)
-    )
-    logger.info(message)
-    return correct_with_margin, correct_without_margin, loss, n_calls
+    return loss, n_calls
 
 def model_filename(model_name, epoch):
     return "{model_name}-epoch-{epoch}.pk".format(model_name=model_name, epoch=epoch)
@@ -174,7 +158,7 @@ def save_model(model, filename, model_folder):
 def build_set(queue, triplet_builder, log):
     while 1:
         datasets = []
-        for i in range(10):
+        for i in range(15):
             dataset = triplet_builder.build_set()
             datasets.append(dataset)
         dataset = ConcatDataset(datasets)
@@ -213,14 +197,12 @@ def main():
     optimizer = optim.SGD(tcn.parameters(), lr=args.lr_start, momentum=0.9)
     # This will diminish the learning rate at the milestones.
     # 0.1, 0.01, 0.001
-    learning_rate_scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[30, 50, 100], gamma=0.5)
+    learning_rate_scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[200,500, 1000], gamma=0.1)
 
     criterion = nn.CrossEntropyLoss()
 
     trn_losses_ = []
     val_losses_= []
-    val_acc_margin_ = []
-    val_acc_no_margin_ = []
 
     n_iter = 0
     n_valid_iter = 0
@@ -241,40 +223,23 @@ def main():
 
         for _ in range(0, ITERATE_OVER_TRIPLETS):
             losses = []
-
-            for minibatch, _ in data_loader:
-                # frames = Variable(minibatch)
-                if use_cuda:
-                    frames = minibatch.cuda()
-                anchor_frames = frames[:, 0, :, :, :]
-                positive_frames = frames[:, 1, :, :, :]
-                negative_frames = frames[:, 2, :, :, :]
-        
-                anchor_output, unnormalized, _ = tcn(anchor_frames)
-                positive_output, _, _ = tcn(positive_frames)
-                negative_output, _, _ = tcn(negative_frames)
-
-                d_positive = distance(anchor_output, positive_output)
-                d_negative = distance(anchor_output, negative_output)
-
-                loss_triplet = torch.clamp(args.margin + d_positive - d_negative, min=0.0).mean()
-                loss = loss_triplet
-                losses.append(loss.data.cpu().numpy())
-
+            for minibatch in data_loader:
+                # frames = Variable(minibatch, require_grad=False)
+                loss = loss_fn(tcn, minibatch)
+                
+                losses.append(loss.data.cpu().numpy()) 
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-        writer.add_scalar('data/train_triplet_loss', np.mean(losses), n_iter)
+        writer.add_scalar('data/train_loss', np.mean(losses), n_iter)
         n_iter += 1  
         trn_losses_.append(np.mean(losses))
         logger.info('train loss: ', np.mean(losses))
 
         if epoch % 1 == 0:
-            acc_margin, acc_no_margin, loss, n_valid_iter = validate(tcn, use_cuda, n_valid_iter)
+            loss, n_valid_iter = validate(tcn, use_cuda, n_valid_iter)
             val_losses_.append(loss)
-            val_acc_margin_.append(acc_margin)
-            val_acc_no_margin_.append(acc_no_margin)
 
         if epoch % args.save_every == 0 and epoch != 0:
             logger.info('Saving model.')
@@ -282,8 +247,6 @@ def main():
         plot_mean(trn_losses_, args.model_folder, 'train_loss')
         plot_mean(val_losses_, args.model_folder, 'validation_loss')
         # plot_mean(train_acc_, args.model_folder, 'train_acc')
-        plot_mean(val_acc_margin_, args.model_folder, 'validation_accuracy_margin')
-        plot_mean(val_acc_no_margin_, args.model_folder, 'validation_accuracy_no_margin')
 
 
 

@@ -128,6 +128,7 @@ class TCNModel(EmbeddingNet):
         self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
         self.SpatialSoftmax = nn.Softmax2d()
         self.FullyConnected7a = Dense(31 * 31 * 20, 32)
+        self.FullyConnected7b = Dense(31 * 31 * 20, 4)
 
         self.alpha = 10.0
 
@@ -165,13 +166,13 @@ class TCNModel(EmbeddingNet):
         # 31 x 31 x 20
         x = self.Conv2d_6b_3x3(x)
         # 31 x 31 x 20
-        x = self.SpatialSoftmax(x)
+        xx = self.SpatialSoftmax(x)
         # 32
-        x = self.FullyConnected7a(x.view(x.size()[0], -1))
+        x = self.FullyConnected7a(xx.view(xx.size()[0], -1))
         
-        aux = self.FullyConnected7b(x.view(x.size()[0], -1))
-        
-
+        aux = self.FullyConnected7b(xx.view(xx.size()[0], -1))
+        aux = self.normalize(aux) 
+ 
         # get 2,048d feature from inception backbone 
         
         # 35 x 35 x 288
@@ -218,7 +219,6 @@ class TCNDepthModel(EmbeddingNet):
         self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
         self.SpatialSoftmax = nn.Softmax2d()
         self.FullyConnected7a = Dense(31 * 31 * 20, 32)
-        self.FullyConnected7b = Dense(31 * 31 * 20, 4)
 
         # Depth layers
         self.Conv2d_depth_1a_3x3 = BatchNormConv2d(1, 64, kernel_size=3, stride=2)

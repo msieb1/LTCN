@@ -91,8 +91,8 @@ class SingleViewTripletBuilder(object):
         triplets = []
         triplets = torch.Tensor(self.sample_size, 3, 3, *self.frame_size)
         # print("Create triplets from {}".format(self.video_paths[self.video_index]))
+        snap = self.get_video(self.video_index)
         for i in range(0, self.sample_size):
-            snap = self.get_video(self.video_index)
             anchor_frame, positive_frame, negative_frame = self.sample_triplet(snap)
             triplets[i, 0, :, :, :] = anchor_frame
             triplets[i, 1, :, :, :] = positive_frame
@@ -143,7 +143,7 @@ class MultiViewTripletBuilder(object):
     def _read_video_dir(self, video_directory):
         self._video_directory = video_directory
         filenames = ls(video_directory)
-        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames]
+        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if f.endswith('.mp4')]
         # for path in self.video_paths:
         #     print(path)
         self.sequence_count = int(len(self.video_paths) / self.n_views)
@@ -160,9 +160,11 @@ class MultiViewTripletBuilder(object):
     @functools.lru_cache(maxsize=1)
     def get_videos(self, index):
         views = []
+        debug_paths = []
         for i in range(self.n_views):
             views.append(read_video(self.video_paths[index + i], self.frame_size))
-        return views
+            debug_paths.append(self.video_paths[index + i])
+        return views, debug_paths
 
     def sample_triplet(self, snaps):
         loaded_sample = False
@@ -194,8 +196,8 @@ class MultiViewTripletBuilder(object):
     def build_set(self):
         triplets = []
         triplets = torch.Tensor(self.sample_size, 3, 3, *self.frame_size)
+        snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
         for i in range(0, self.sample_size):
-            snaps = self.get_videos(self.sequence_index * self.n_views)
             anchor_frame, positive_frame, negative_frame = self.sample_triplet(snaps)
             triplets[i, 0, :, :, :] = anchor_frame
             triplets[i, 1, :, :, :] = positive_frame
@@ -210,7 +212,7 @@ class MultiViewTripletBuilder(object):
         arange = np.arange(0, self.frame_lengths[self.sequence_index * self.n_views])
         return np.random.choice(arange)
 
-    # def sample_positive_frame_index(self, anchor_index):
+    # def samplfe_positive_frame_index(self, anchor_index):
     #     upper_bound = min(self.frame_lengths[self.sequence_index * self.n_views + 1] - 1, anchor_index)
     #     return upper_bound # in case video has less frames than anchor video
 
@@ -232,7 +234,7 @@ class PoseMultiViewTripletBuilder(MultiViewTripletBuilder):
         super(PoseMultiViewTripletBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size)
     
     @functools.lru_cache(maxsize=1)
-    def get_pose(self, index):
+    def get_poses(self, index):
         views = []
         for i in range(self.n_views):
             views.append(np.load(self.video_paths[index + i].split('.mp4')[0]+'.npy')[:, -4:])
@@ -274,9 +276,10 @@ class PoseMultiViewTripletBuilder(MultiViewTripletBuilder):
         triplets = []
         triplets = torch.Tensor(self.sample_size, 3, 3, *self.frame_size)
         pose_triplets = torch.Tensor(self.sample_size, 3, 4)
+        snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
+        #print("building set from video sequence, loaded paths: {}".format(debug_paths))
         for i in range(0, self.sample_size):
-            snaps = self.get_videos(self.sequence_index * self.n_views)
-            poses = self.get_pose(self.sequence_index * self.n_views)
+            poses = self.get_poses(self.sequence_index * self.n_views)
             anchor_frame, positive_frame, negative_frame, \
                        anchor_pose, positive_pose, negative_pose = self.sample_triplet(snaps, poses)
             triplets[i, 0, :, :, :] = anchor_frame
@@ -286,7 +289,7 @@ class PoseMultiViewTripletBuilder(MultiViewTripletBuilder):
             pose_triplets[i, 1, :] = positive_pose
             pose_triplets[i, 2, :] = negative_pose
         self.sequence_index = (self.sequence_index + 1) % self.sequence_count
-        
+        print(self.sequence_index) 
         # Second argument is labels. Not used.
         return TensorDataset(triplets, pose_triplets)
 
@@ -985,4 +988,107 @@ class MultiViewDepthTripletBuilder(MultiViewTripletBuilder):
         views = []
         for i in range(self.n_views):
             views.append(read_video(self.depth_video_paths[index + i], self.frame_size))
-        return views       
+        return views 
+
+class SingleViewPoseBuilder(object):
+    def __init__(self, view, video_directory, image_size, cli_args, sample_size=500):
+        self.frame_size = image_size
+        self.view = view
+        self._read_video_dir(video_directory)
+        self._count_frames()
+        # The negative example has to be from outside the buffer window. Taken from both sides of
+        # ihe frame.
+        self.positive_frame_margin = 2
+        self.negative_frame_margin = 4
+        self.video_index = 0
+        self.cli_args = cli_args
+        self.sample_size = sample_size
+
+    def _read_video_dir(self, video_directory):
+        self._video_directory = video_directory
+        filenames = ls_extracted(video_directory)
+        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if f.endswith('.mp4')]
+        self.video_count = len(self.video_paths)
+
+    def _read_extracted_video_dir(self, video_directory):
+        self._video_directory = video_directory
+        filenames = ls_extracted(video_directory)
+        # self.video_paths = [os.path.join(self._video_directory, f.split('.mp4')[0]) for f in filenames]
+        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if not f.endswith('.mp4') and 'debug' not in f]
+        self.video_count = len(self.video_paths)
+
+    def _count_frames(self):
+        frame_lengths = np.array([len(imageio.read(p)) for p in self.video_paths])
+        self.frame_lengths = frame_lengths
+        self.cumulative_lengths = np.zeros(len(self.frame_lengths), dtype=np.int32)
+        prev = 0
+        for i, frames in enumerate(self.frame_lengths):
+            prev = self.cumulative_lengths[i-1]
+            self.cumulative_lengths[i] = prev + frames
+
+    def _count_extracted_frames(self):
+        frame_lengths = np.array([len(os.listdir(p)) for p in self.video_paths if p.endswith('.jpg')])
+        self.frame_lengths = frame_lengths
+        self.cumulative_lengths = np.zeros(len(self.frame_lengths), dtype=np.int32)
+        prev = 0
+        for i, frames in enumerate(self.frame_lengths):
+            prev = self.cumulative_lengths[i-1]
+            self.cumulative_lengths[i] = prev + frames
+
+    @functools.lru_cache(maxsize=1)
+    def get_video(self, index):
+        return read_video(self.video_paths[index], self.frame_size)
+    
+    @functools.lru_cache(maxsize=1)
+    def get_pose(self, index):
+        return np.load(self.video_paths[index].split('.mp4')[0]+'.npy')[:, -4:]
+
+    def sample(self, snap, pose):
+        anchor_index = self.sample_anchor_frame_index()
+        anchor_frame = snap[anchor_index]
+        anchor_pose = pose[anchor_index]
+        return (torch.Tensor(anchor_frame), torch.Tensor(anchor_pose))
+
+    def build_set(self):
+        triplets = []
+        frames = torch.Tensor(self.sample_size, 3, *self.frame_size)
+        poses = torch.Tensor(self.sample_size, 4)
+        # print("Create triplets from {}".format(self.video_paths[self.video_index]))
+        
+        
+        snap = self.get_video(self.video_index)
+        pose = self.get_pose(self.video_index)
+        
+        for i in range(0, self.sample_size):
+            anchor_frame, anchor_pose = self.sample(snap, pose)
+            frames[i, :, :, :] = anchor_frame
+            poses[i, :] = anchor_pose
+        self.video_index = (self.video_index + 1) % self.video_count
+        # Second argument is labels. Not used.
+        return TensorDataset(frames, poses)
+
+    def sample_anchor_frame_index(self):
+        arange = np.arange(0, self.frame_lengths[self.video_index])
+        return np.random.choice(arange)
+
+    def sample_positive_frame_index(self, anchor_index):
+        lower_bound = max(0, anchor_index - self.positive_frame_margin)
+        range1 = np.arange(lower_bound, anchor_index)
+        upper_bound = min(self.frame_lengths[self.video_index] - 1, anchor_index + self.positive_frame_margin)
+        range2 = np.arange(anchor_index + 1, upper_bound)
+        return np.random.choice(np.concatenate([range1, range2]))
+
+    def negative_frame_indices(self, anchor_index):
+        video_length = self.frame_lengths[self.video_index]
+        lower_bound = 0
+        upper_bound = max(0, anchor_index - self.negative_frame_margin)
+        range1 = np.arange(lower_bound, upper_bound)
+        lower_bound = min(anchor_index + self.negative_frame_margin, video_length)
+        upper_bound = video_length 
+        range2 = np.arange(lower_bound, upper_bound)
+        return np.concatenate([range1, range2])
+
+    def sample_negative_frame_index(self, anchor_index):
+        return np.random.choice(self.negative_frame_indices(anchor_index))
+
+
