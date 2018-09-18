@@ -711,6 +711,83 @@ class SingleViewDepthTripletExtractedBuilder(SingleViewDepthTripletBuilder):
     def sample_negative_frame_index(self, anchor_index, video):
         return np.random.choice(self.negative_frame_indices(anchor_index, video))
 
+class MultiFrameBuilder(object):
+    # Assumes that all videos/views are trained as single training examples, i.e. every view is its own sample
+    def __init__(self, view, n_prev_frames, video_directory, image_size, cli_args, sample_size=500):
+        self.frame_size = image_size
+        self.view = view
+        self.n_prev_frames = n_prev_frames
+        self._read_video_dir(video_directory)
+        self._count_frames()
+        # The negative example has to be from outside the buffer window. Taken from both sides of
+        # ihe frame.
+        self.negative_frame_margin = 10 
+        self.cli_args = cli_args
+        self.sample_size = sample_size
+        self.video_index = 0
+
+    def _read_video_dir(self, video_directory):
+        self._video_directory = video_directory
+        filenames = ls(video_directory)
+        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames]
+        # for path in self.video_paths:
+        #     print(path)
+        self.video_count = len(self.video_paths)
+
+    def _count_frames(self):
+        frame_lengths = np.array([len(imageio.read(p)) for p in self.video_paths])
+        self.frame_lengths = frame_lengths - OFFSET
+        self.cumulative_lengths = np.zeros(len(self.frame_lengths), dtype=np.int32)
+        prev = 0
+        for i, frames in enumerate(self.frame_lengths):
+            prev = self.cumulative_lengths[i-1]
+            self.cumulative_lengths[i] = prev + frames
+    
+    @functools.lru_cache(maxsize=1)
+    def get_delta_pose(self, index, type='ee'):
+        # pose is (T, 4)
+        seqname = self.video_paths[index].split('/')[-1].split('_')[0]
+        filepath = '/'.join(self.video_paths[index].split('/')[:-1]) + '/'  + seqname + '_' + type
+        pose = np.load(filepath)[:, -4]
+        pose[1:] -= pose[:-1]
+        pose[0] *= 0
+        delta_pose = pose
+        set_trace()
+        return delta_pose
+
+    @functools.lru_cache(maxsize=1)
+    def get_video(self, index):
+        return read_video(self.video_paths[index], self.frame_size)
+
+    def sample(self, snaps, delta_pose):
+        anchor_frames = np.zeros((self.n_prev_frames + 1, 3, 299, 299))
+        anchor_frames[0] = snaps[anchor_index]
+        anchor_delta_pose = delta_pose[anchor_index]
+
+        for ii in range(1, self.n_prev_frames+1):    
+            anchor_frames[ii] = snaps[anchor_index-ii]
+
+        return (torch.Tensor(anchor_frames), torch.Tensor(anchor_delta_pose))
+            
+
+    def build_set(self):
+        frames = torch.Tensor(self.sample_size, self.n_prev_frames + 1, 3, *self.frame_size)
+        delta_poses = torch.Tensor(self.sample_size, 4)
+        #print(self.video_paths[self.video_index])
+        snap = self.get_video(self.video_index)
+        delta_pose = self.get_delta_pose(self.video_index)
+        for i in range(0,i self.sample_size):
+            anchor_frame, anchor_delta_pose = self.sample(snap, delta_pose)
+            frames[i, :, :, :] = anchor_frame
+            delta_poses[i, :] = anchor_delta_pose
+        self.video_index = (self.video_index + 1) % self.video_count
+        # Second argument is labels. Not used.
+        return TensorDataset(frames, delta_poses)
+
+    def sample_anchor_frame_index(self):
+        arange = np.arange(0 + self.n_prev_frames, self.frame_lengths[self.video_index])
+        return np.random.choice(arange)
+
 
 
 class SingleViewMultiFrameTripletBuilder(object):
@@ -777,7 +854,6 @@ class SingleViewMultiFrameTripletBuilder(object):
             positive_frame[ii] = snaps[positive_index-ii]
             negative_frame[ii] = snaps[negative_index-ii]
 
-        set_trace()
         return (torch.Tensor(anchor_frame), torch.Tensor(positive_frame),
             torch.Tensor(negative_frame))
 
