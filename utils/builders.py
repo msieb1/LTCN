@@ -19,9 +19,21 @@ import time
 
 from builder_utils import distance, view_image, write_to_csv, ensure_folder, resize_frame, write_video, \
                 read_video, read_extracted_rcnn_results, read_caption, ls_directories, ls, ls_unparsed_txt, ls_npy, \
-                ls_txt, ls_view, read_extracted_video, Logger, ls_extracted, crop_box, crop_uniform_box, get_box_center
+                ls_txt, ls_view, read_extracted_video, Logger, ls_extracted, crop_box, crop_uniform_box, get_box_center, \
+                create_rot_from_vector, rotationMatrixToEulerAngles, isRotationMatrix, eulerAnglesToRotationMatrix
 from plot_utils import concat_frames_nosave
 
+
+sys.path.append('/home/max/projects/gps-lfd') 
+sys.path.append('/home/msieb/projects/gps-lfd')
+from config import Config_Isaac_Server as Config, Camera_Config # Import approriate config
+conf = Config()
+
+# Camera Config
+cam_conf = Camera_Config()
+VIEW_PARAMS = cam_conf.VIEW_PARAMS
+PROJ_PARAMS = cam_conf.PROJ_PARAMS
+ROT_MATRICES = cam_conf.ROT_MATRICES
 #sys.path.append('/home/msieb/projects/Mask_RCNN/samples')
 #from baxter.baxter import BaxterConfig, InferenceConfig
 
@@ -289,9 +301,55 @@ class PoseMultiViewTripletBuilder(MultiViewTripletBuilder):
             pose_triplets[i, 1, :] = positive_pose
             pose_triplets[i, 2, :] = negative_pose
         self.sequence_index = (self.sequence_index + 1) % self.sequence_count
-        print(self.sequence_index) 
         # Second argument is labels. Not used.
         return TensorDataset(triplets, pose_triplets)
+
+class MultiViewBuilder(MultiViewTripletBuilder):
+    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500):
+        super(MultiViewBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size)
+    
+    @functools.lru_cache(maxsize=1)
+    def get_rot(self, index):
+        views = []
+        for i in range(self.n_views):
+            views.append(ROT_MATRICES[i])
+        return views
+
+    def sample_triplet(self, snaps, rot):
+        anchor_frames = np.zeros((2, 3, 299, 299))
+        anchor_index = self.sample_anchor_frame_index()
+        positive_index = anchor_index
+        # negative_index = self.sample_negative_frame_index(anchor_index)
+        # random sample anchor view,and positive view
+        view_set = set(range(self.n_views))
+        anchor_view = np.random.choice(np.array(list(view_set)))
+        view_set.remove(anchor_view)
+        positive_view = np.random.choice(np.array(list(view_set)))
+        #negative_view = anchor_view # negative example comes from same view INQUIRE TODO
+
+        anchor_frames[0] = snaps[anchor_view][anchor_index]
+        anchor_frames[1] = snaps[positive_view][positive_index]
+        #negative_frame = snaps[negative_view][negative_index]
+        # what shape has pose? T x 7?
+        delta_rot = rot[positive_view].dot(rot[anchor_view].T)
+        delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
+        return (torch.Tensor(anchor_frames), torch.Tensor(delta_rot))
+
+    def build_set(self):
+        frames = torch.Tensor(self.sample_size, 2, 3, *self.frame_size)
+        delta_rots = torch.Tensor(self.sample_size, 6)
+        rot = self.get_rot(self.sequence_index * self.n_views)
+        snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
+        #print("building set from video sequence, loaded paths: {}".format(debug_paths))
+        for i in range(0, self.sample_size):
+            anchor_frame, delta_rot = self.sample_triplet(snaps, rot)
+
+            frames[i, 0, :, :, :] = anchor_frame[0]
+            frames[i, 1, :, :, :] = anchor_frame[1]
+            delta_rots[i, :] = delta_rot
+        self.sequence_index = (self.sequence_index + 1) % self.sequence_count
+        # Second argument is labels. Not used.
+        return TensorDataset(frames, delta_rots)
 
 class SingleViewDepthTripletBuilder(SingleViewTripletBuilder):
     def __init__(self, view, video_directory, depth_video_directory, image_size, cli_args, sample_size=500):
@@ -725,7 +783,7 @@ class MultiFrameBuilder(object):
         self.cli_args = cli_args
         self.sample_size = sample_size
         self.video_index = 0
-
+        self.skipped_frames = 4
     def _read_video_dir(self, video_directory):
         self._video_directory = video_directory
         filenames = ls(video_directory)
@@ -747,12 +805,11 @@ class MultiFrameBuilder(object):
     def get_delta_pose(self, index, type='ee'):
         # pose is (T, 4)
         seqname = self.video_paths[index].split('/')[-1].split('_')[0]
-        filepath = '/'.join(self.video_paths[index].split('/')[:-1]) + '/'  + seqname + '_' + type
-        pose = np.load(filepath)[:, -4]
-        pose[1:] -= pose[:-1]
-        pose[0] *= 0
+        filepath = '/'.join(self.video_paths[index].split('/')[:-1]) + '/'  + seqname + '_' + type + '.npy'
+        pose = np.load(filepath)[:, -4:]
+        pose[1+self.skipped_frames:] -= pose[:-1-self.skipped_frames]
+        pose[0+self.skipped_frames] *= 0
         delta_pose = pose
-        set_trace()
         return delta_pose
 
     @functools.lru_cache(maxsize=1)
@@ -761,11 +818,12 @@ class MultiFrameBuilder(object):
 
     def sample(self, snaps, delta_pose):
         anchor_frames = np.zeros((self.n_prev_frames + 1, 3, 299, 299))
+        anchor_index = self.sample_anchor_frame_index()
         anchor_frames[0] = snaps[anchor_index]
         anchor_delta_pose = delta_pose[anchor_index]
 
         for ii in range(1, self.n_prev_frames+1):    
-            anchor_frames[ii] = snaps[anchor_index-ii]
+            anchor_frames[ii] = snaps[anchor_index-self.skipped_frames-ii]
 
         return (torch.Tensor(anchor_frames), torch.Tensor(anchor_delta_pose))
             
@@ -776,7 +834,7 @@ class MultiFrameBuilder(object):
         #print(self.video_paths[self.video_index])
         snap = self.get_video(self.video_index)
         delta_pose = self.get_delta_pose(self.video_index)
-        for i in range(0,i self.sample_size):
+        for i in range(0, self.sample_size):
             anchor_frame, anchor_delta_pose = self.sample(snap, delta_pose)
             frames[i, :, :, :] = anchor_frame
             delta_poses[i, :] = anchor_delta_pose
@@ -785,7 +843,7 @@ class MultiFrameBuilder(object):
         return TensorDataset(frames, delta_poses)
 
     def sample_anchor_frame_index(self):
-        arange = np.arange(0 + self.n_prev_frames, self.frame_lengths[self.video_index])
+        arange = np.arange(0 + self.n_prev_frames + self.skipped_frames, self.frame_lengths[self.video_index])
         return np.random.choice(arange)
 
 

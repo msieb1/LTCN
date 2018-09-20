@@ -2,6 +2,7 @@ import os
 import functools
 import imageio
 import numpy as np
+import math
 from PIL import Image
 import torch
 from torch.utils.data import Dataset, TensorDataset
@@ -251,3 +252,165 @@ def get_box_center(box):
     x1 = box[1]
     x2 = box[3]
     return (x1 + x2)/2, (y1 + y2)/2
+
+
+# Calculates Rotation Matrix given euler angles.
+def eulerAnglesToRotationMatrix(theta):
+    """
+    Theta is given as euler angles Z-Y-X, corresponding to yaw, pitch, roll
+    """
+     
+    R_x = np.array([[1,         0,                  0                   ],
+                    [0,         math.cos(theta[0]), -math.sin(theta[0]) ],
+                    [0,         math.sin(theta[0]), math.cos(theta[0])  ]
+                    ])
+         
+         
+                     
+    R_y = np.array([[math.cos(theta[1]),    0,      math.sin(theta[1])  ],
+                    [0,                     1,      0                   ],
+                    [-math.sin(theta[1]),   0,      math.cos(theta[1])  ]
+                    ])
+                 
+    R_z = np.array([[math.cos(theta[2]),    -math.sin(theta[2]),    0],
+                    [math.sin(theta[2]),    math.cos(theta[2]),     0],
+                    [0,                     0,                      1]
+                    ])
+                     
+                     
+    R = np.dot(R_z, np.dot( R_y, R_x ))
+
+    return R
+
+
+    # Checks if a matrix is a valid rotation matrix.
+def isRotationMatrix(R) :
+    Rt = np.transpose(R)
+    shouldBeIdentity = np.dot(Rt, R)
+    I = np.identity(3, dtype = R.dtype)
+    n = np.linalg.norm(I - shouldBeIdentity)
+    return n < 1e-6
+ 
+ 
+# Calculates rotation matrix to euler angles
+# The result is the same as MATLAB except the order
+# of the euler angles ( x and z are swapped ).
+def rotationMatrixToEulerAngles(R) :
+ 
+    assert(isRotationMatrix(R))
+     
+    sy = math.sqrt(R[0,0] * R[0,0] +  R[1,0] * R[1,0])
+     
+    singular = sy < 1e-6
+ 
+    if  not singular :
+        x = math.atan2(R[2,1] , R[2,2])
+        y = math.atan2(-R[2,0], sy)
+        z = math.atan2(R[1,0], R[0,0])
+    else :
+        x = math.atan2(-R[1,2], R[1,1])
+        y = math.atan2(-R[2,0], sy)
+        z = 0
+ 
+    return np.array([x, y, z])
+
+
+def create_rot_from_vector(vector):
+    """
+    vector should be 6 dimensional
+    """
+    # random unit vectors
+    u = vector[:3]
+    v = vector[3:]
+    u /= np.linalg.norm(u)
+    v /= np.linalg.norm(v)
+    # subtract (v*u)u from v and normalize
+    v -= v.dot(u)*u
+    v /= np.linalg.norm(v)
+    # build cross product
+    w = np.cross(u, v)
+    w /= np.linalg.norm(w)
+    R = np.hstack([u[:,None], v[:,None], w[:,None]])
+    assert isRotationMatrix(R)
+    return R
+
+
+# Calculates Rotation Matrix given euler angles.
+def eulerAnglesToRotationMatrix(theta) :
+    """
+    Theta is given as euler angles Z-Y-X, corresponding to yaw, pitch, roll
+    """
+     
+    R_x = np.array([[1,         0,                  0                   ],
+                    [0,         math.cos(theta[0]), -math.sin(theta[0]) ],
+                    [0,         math.sin(theta[0]), math.cos(theta[0])  ]
+                    ])
+         
+         
+                     
+    R_y = np.array([[math.cos(theta[1]),    0,      math.sin(theta[1])  ],
+                    [0,                     1,      0                   ],
+                    [-math.sin(theta[1]),   0,      math.cos(theta[1])  ]
+                    ])
+                 
+    R_z = np.array([[math.cos(theta[2]),    -math.sin(theta[2]),    0],
+                    [math.sin(theta[2]),    math.cos(theta[2]),     0],
+                    [0,                     0,                      1]
+                    ])
+                     
+                     
+    R = np.dot(R_z, np.dot( R_y, R_x ))
+ 
+    return R
+
+
+    # Checks if a matrix is a valid rotation matrix.
+def isRotationMatrix(R) :
+    Rt = np.transpose(R)
+    shouldBeIdentity = np.dot(Rt, R)
+    I = np.identity(3, dtype = R.dtype)
+    n = np.linalg.norm(I - shouldBeIdentity)
+    return n < 1e-6
+ 
+ 
+# Calculates rotation matrix to euler angles
+# The result is the same as MATLAB except the order
+# of the euler angles ( x and z are swapped ).
+def rotationMatrixToEulerAngles(R) :
+ 
+    assert(isRotationMatrix(R))
+     
+    sy = math.sqrt(R[0,0] * R[0,0] +  R[1,0] * R[1,0])
+     
+    singular = sy < 1e-6
+ 
+    if  not singular :
+        x = math.atan2(R[2,1] , R[2,2])
+        y = math.atan2(-R[2,0], sy)
+        z = math.atan2(R[1,0], R[0,0])
+    else :
+        x = math.atan2(-R[1,2], R[1,1])
+        y = math.atan2(-R[2,0], sy)
+        z = 0
+ 
+    return np.array([x, y, z])
+
+
+def create_rot_from_vector(vector):
+    """
+    vector should be 6 dimensional
+    """
+    # random unit vectors
+    u = vector[:3]
+    v = vector[3:]
+    u /= np.linalg.norm(u)
+    v /= np.linalg.norm(v)
+    # subtract (v*u)u from v and normalize
+    v -= v.dot(u)*u
+    v /= np.linalg.norm(v)
+    # build cross product
+    w = np.cross(u, v)
+    w /= np.linalg.norm(w)
+    R = np.hstack([u[:,None], v[:,None], w[:,None]])
+    assert isRotationMatrix(R)
+    return R

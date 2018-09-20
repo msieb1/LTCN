@@ -16,10 +16,11 @@ from torch import multiprocessing
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.builders import MultiFrameBuilder 
-from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped
+from utils.builders import MultiViewBuilder 
+from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped, \
+            create_rot_from_vector, rotationMatrixToEulerAngles, isRotationMatrix, eulerAnglesToRotationMatrix
 from utils.vocabulary import Vocabulary
-from inv_tcn import define_model
+from view_tcn import define_model
 from ipdb import set_trace
 from sklearn.preprocessing import OneHotEncoder
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
@@ -51,10 +52,10 @@ EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 USE_CUDA = conf.USE_CUDA
 NUM_VIEWS = conf.NUM_VIEWS
-SAMPLE_SIZE = 50
-TRAIN_SEQS_PER_EPOCH = 15
+SAMPLE_SIZE = 10
+TRAIN_SEQS_PER_EPOCH = 10 
 VAL_SEQS = 5 
-builder = MultiFrameBuilder
+builder = MultiViewBuilder
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
@@ -94,7 +95,7 @@ logger = Logger(args.log_file)
 def batch_size(epoch, max_size):
     exponent = epoch // 100
     return min(max(2 ** (exponent), 2), max_size)
-validation_builder = builder(args.n_views, N_PREV_FRAMES, args.validation_directory, IMAGE_SIZE, args, sample_size=int(SAMPLE_SIZE/2.0))
+validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=int(SAMPLE_SIZE/2.0))
 validation_set = [validation_builder.build_set() for i in range(VAL_SEQS)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
@@ -105,10 +106,13 @@ def loss_fn(tcn, minibatch, lambd=0.1):
 
     if USE_CUDA:
        anchor_frames = minibatch[0].cuda()
-       anchor_poses = minibatch[1].cuda() * 100
+       anchor_rots = minibatch[1].cuda()
     
-    features_after_gt, features_after_pred, anchor_poses_pred = tcn(anchor_frames, anchor_poses)
-    inv_loss = torch.nn.L1Loss()(anchor_poses_pred, anchor_poses) 
+    features_after_gt, features_after_pred, anchor_rot_pred = tcn(anchor_frames, anchor_rots)
+    #delta_rot_pred = create_rot_from_vector(anchor_rot_pred)    
+    #delta_rot_pred = np.reshape(delta_rot_pred, -1)
+    delta_rot_pred = anchor_rot_pred
+    inv_loss = torch.nn.L1Loss()(delta_rot_pred, anchor_rots) 
     features_after_gt.detach_()
     fwd_loss = torch.nn.L1Loss()(features_after_pred, features_after_gt)
     loss = inv_loss + 0.1*fwd_loss
@@ -175,14 +179,13 @@ def create_model(use_cuda):
         tcn = tcn.cuda()
     return tcn
 
-
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     use_cuda = torch.cuda.is_available()
 
     tcn = create_model(use_cuda)
     tcn = torch.nn.DataParallel(tcn, device_ids=range(torch.cuda.device_count()))
-    triplet_builder = builder(args.n_views, N_PREV_FRAMES, \
+    triplet_builder = builder(args.n_views, \
         args.train_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
 
     queue = multiprocessing.Queue(1)
@@ -237,10 +240,8 @@ def main():
         trn_losses_.append(np.mean(losses))
         logger.info('train loss: ', np.mean(losses))
         writer.add_image('frame_1', minibatch[0][0], 0)
-        writer.add_image('frame_2', minibatch[0][2],0)
-        writer.add_image('frame_3', minibatch[0][3],0)
-        writer.add_image('frame_4', minibatch[0][4],0)
-        writer.add_image('frame_5', minibatch[0][5],0)
+        writer.add_image('frame_2', minibatch[0][1],0)
+        writer.add_image('frame_3', minibatch[0][2],0)
         if epoch % 1 == 0:
             loss, n_valid_iter = validate(tcn, use_cuda, n_valid_iter)
             val_losses_.append(loss)
