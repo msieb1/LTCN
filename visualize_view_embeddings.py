@@ -4,7 +4,7 @@ import numpy as np
 import torchvision.models as models
 from torchvision import datasets
 from tensorboardX import SummaryWriter
-
+from pyquaternion import Quaternion
 import sys
 import os
 import argparse
@@ -16,7 +16,7 @@ import imageio
 from PIL import Image
 from pdb import set_trace
 
-from utils.builder_utils import time_stamped
+from utils.builder_utils import time_stamped, rotationMatrixToEulerAngles
 
 sys.path.append('/home/max/projects/gps-lfd')
 sys.path.append('/home/msieb/projects/gps-lfd')
@@ -26,8 +26,8 @@ conf = Config()
 
 sys.path.append(conf.TCN_PATH)
 # from tcn import define_model_depth as define_model # different model architectures - fix at some p$
-from pose_tcn import define_model as define_model # different model architectures - fix at some point bec$
-#from inv_tcn import define_model
+#from pose_tcn import define_model as define_model # different model architectures - fix at some point bec$
+from view_tcn import define_model
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1, 2, 4"
@@ -38,8 +38,9 @@ MODE = conf.MODE
 MODEL_FOLDER = conf.MODEL_FOLDER
 MODEL_NAME = conf.MODEL_NAME
 MODEL_PATH = join(EXP_DIR, EXP_NAME, 'trained_models',MODEL_FOLDER, MODEL_NAME)
-
+print("Model path: ", MODEL_PATH)
 RGB_PATH = join(EXP_DIR, EXP_NAME, 'videos', MODE)
+print("Video path: ", RGB_PATH)
 DEPTH_PATH = join(EXP_DIR, EXP_NAME, 'depth', MODE)
 #OUTPUT_PATH = '/media/msieb/1e2e903d-5929-40bd-a22a-a94fd9e5bcce/tcn_data/experiments/rotating_tcn_$
 OUTPUT_PATH = join(EXP_DIR, EXP_NAME, 'videos_features', MODEL_FOLDER, MODE)
@@ -119,33 +120,50 @@ def main(args):
         print("Processing ", file)
         reader = imageio.get_reader(join(RGB_PATH, file))
         reader_depth = imageio.get_reader(join(DEPTH_PATH, file))
-
+        
         embeddings = np.zeros((len(reader), 4))
         embeddings_episode_buffer = []
-        poses = np.load(join(RGB_PATH, file.split('.mp4')[0]+'.npy'))[:, -4:]  
-        
+        #poses = np.load(join(RGB_PATH, file.split('.mp4')[0]+'.npy'))[:, -4:]  
         i = 0
+        
+        rgb_buffer = []
+        depth_buffer = []
         for im, im_depth in zip(reader, reader_depth):
-            i += 1
-            if i % 5 != 0:
-                continue
+            rgb_buffer.append(im)
+            depth_buffer.append(im_depth)
+
+        for i in range(0, len(reader)-1):
+            #i += 1
+            #if i % 5 != 0:
+            #    continue
+            im = rgb_buffer[i]
+            im_depth = depth_buffer[i]
+            im_before = rgb_buffer[i-1]
+            im_depth_before = depth_buffer[i-1]
             image_buffer.append(im)
+
             resized_image = resize_frame(im, IMAGE_SIZE)[None, :]
             resized_depth = resize_frame(im_depth, IMAGE_SIZE)[None, :]
             # resized_depth = resize_frame(depth_rescaled[:, :, None], IMAGE_SIZE)[None, :]
             frame = np.concatenate([resized_image[0], resized_depth[0, None, 0]], axis=0)
+            resized_image_before = resize_frame(im_before, IMAGE_SIZE)[None, :]
+            resized_depth_before = resize_frame(im_depth_before, IMAGE_SIZE)[None, :]
+            # resized_depth = resize_frame(depth_rescaled[:, :, None], IMAGE_SIZE)[None, :]
+            frame_before = np.concatenate([resized_image_before[0], resized_depth_before[0, None, 0]], axis=0)
+           
+            frames = np.concatenate([resized_image_before, resized_image], axis=0)
             if USE_CUDA:
-              output_normalized, output_unnormalized, pose_output = tcn(torch.Tensor(frame[None, :]).cuda())
+              state_embedding_second, a_pred, state_embedding_first  = tcn(torch.Tensor(frames[None]).cuda())
             else:
-              output_normalized, output_unnormalized, pose_output = tcn(torch.Tensor(frame[None, :]))         
-            embeddings_episode_buffer.append(pose_output.detach().cpu().numpy())
-            #label_buffer.append(int(file.split('_')[0])) # video sequence label
+              state_embedding_second, a_pred, state_embedding_first = tcn(torch.Tensor(frames[None]))         
+            embeddings_episode_buffer.append(state_embedding_first.detach().cpu().numpy())
+            label_buffer.append(int(file.split('_')[0])) # video sequence label
             #label_buffer.append(poses[i-1]) # video sequence label
-            label_buffer.append(np.concatenate([poses[i-1],np.array(int(file.split('view')[1].split('.mp4')[0]))[None]])) 
+            #label_buffer.append(np.concatenate([delta_euler,np.array(int(file.split('view')[1].split('.mp4')[0]))[None]])) 
             #label_buffer.append(i) # view label
         feature_buffer.append(np.array(embeddings_episode_buffer))
         j += 1
-        if j >= 6:
+        if j >= 20:
             break
     print('generate embedding')
     feature_buffer = np.squeeze(np.array(feature_buffer))
@@ -158,6 +176,22 @@ def main(args):
     
     print('Exit function')
 
-if __name__ == '__main__':
+
+def get_delta_euler(file):
+    # pose is (T, 4)
+    pose = np.load(join(RGB_PATH, file.split('.mp4')[0].split('_')[0] +'_ee.npy'))[:, -4:]    
+    pose = pose[:,-4:]
+    delta_euler = np.zeros((len(pose), 3))
+    for i in range(len(pose) - 1 - skipped_frames):
+        pose[:, [0,3]] = pose[:, [3, 0]]
+        q1 = Quaternion(pose[i])
+        q2 = Quaternion(pose[i + 1 + skipped_frames])
+        delta_q = q2*q1.inverse
+        delta_euler[i] = rotationMatrixToEulerAngles(delta_q.rotation_matrix)
+    return delta_euler
+
+
+
+if  __name__ == '__main__':
     args = parser.parse_args()
     main(args)

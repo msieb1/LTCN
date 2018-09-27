@@ -78,8 +78,6 @@ class PosNet(EmbeddingNet):
 class TCNModel(EmbeddingNet):
     def __init__(self, inception):  
         super(TCNModel, self).__init__()
-        self.action_dim = 3
-        self.state_dim = 32
         self.transform_input = True
         self.Conv2d_1a_3x3 = inception.Conv2d_1a_3x3
         self.Conv2d_2a_3x3 = inception.Conv2d_2a_3x3
@@ -100,25 +98,22 @@ class TCNModel(EmbeddingNet):
         self.Conv2d_6a_3x3 = BatchNormConv2d(288, 100, kernel_size=3, stride=1)
         self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
         self.SpatialSoftmax = nn.Softmax2d()
-        self.FullyConnected7a = Dense(31 * 31 * 20, self.state_dim)
-        self.FullyConnectedConcat = Dense(2*self.state_dim, 256)
-        self.FullyConnectedPose1 = Dense(256, 512)
-        self.FullyConnectedPose2 = Dense(512, 256)
-        self.FullyConnectedPose3 = Dense(256, self.action_dim)
-
-        
-        self.FullyConnectedAction1 = Dense(self.state_dim + self.action_dim, 256)
+        self.FullyConnected7a = Dense(31 * 31 * 20, 32)
+        self.FullyConnectedConcat = Dense(64, 256)
+        self.FullyConnectedPose = Dense(256, 3)
+        self.tanh = torch.nn.Tanh() 
+        self.FullyConnectedAction1 = Dense(35, 256) # 32 + 9 (Rot, find out if 6 is possible, maybe only u and v and discard w, 3rd column of R?)
         self.FullyConnectedAction2 = Dense(256,512)
         self.FullyConnectedAction3 = Dense(512, 256)
         self.FullyConnectedAction4 = Dense(256, 32)
-
+        
         self.alpha = 10.0
 
     def forward(self, x, a):
         if self.transform_input:
             x = x.clone()
             x[:, :, 0] = x[:, :, 0] * (0.229 / 0.5) + (0.485 - 0.5) / 0.5
-            x[:,:,  1] = x[:, :, 1] * (0.224 / 0.5) + (0.456 - 0.5) / 0.5
+            x[:, :,  1] = x[:, :, 1] * (0.224 / 0.5) + (0.456 - 0.5) / 0.5
             x[:, :, 2] = x[:, :, 2] * (0.225 / 0.5) + (0.406 - 0.5) / 0.5
         # 299 x 299 x 3
         batch_size = x.size()[0]
@@ -149,34 +144,31 @@ class TCNModel(EmbeddingNet):
         # 31 x 31 x 20
         x = self.Conv2d_6b_3x3(x)
         # 31 x 31 x 20
-        #x = self.SpatialSoftmax(x)
+        x = self.SpatialSoftmax(x)
         # 32
         x = self.FullyConnected7a(x.view(x.size()[0], -1))
         # Reshape to separate inputs
         xx = x.view(batch_size, frames_per_batch, -1)
 
-        # Split input frames, x1 is before, x2 is after image
+        # Split input frames, x2 is before, x1 is after imasge
         x1 = xx[:, 0]
         x2 = xx[:, 1]
         # Build forward model
-        ax = torch.cat((a, x1), 1)    # x is features_before, a applied action at that time t 
+        ax = torch.cat((a, x2), 1)    # x is features_before, a applied action at that time t 
         ax = self.FullyConnectedAction1(ax)
-        #ax = self.FullyConnectedAction2(ax)
-        #ax = self.FullyConnectedAction3(ax)
+        ax = self.FullyConnectedAction2(ax)
+        ax = self.FullyConnectedAction3(ax)
         after = self.FullyConnectedAction4(ax)
         # Build inverse model
         # Concatenate resulting features to 64d-vector
         x_cat = torch.cat((x1, x2), 1)     
         x_cat = self.FullyConnectedConcat(x_cat)
-        #a_inv = self.FullyConnectedPose1(x_cat)
-        #a_inv = self.FullyConnectedPose2(a_inv)
-        a_inv = self.FullyConnectedPose3(x_cat)
-
-        after_gt = x2
-        before_gt = x1
+        a_inv = self.FullyConnectedPose(x_cat)
+        a_inv = self.tanh(a_inv)
+        after_gt = x1
         # Normalize output such that output lives on unit sphere.
         # Multiply by alpha as in https://arxiv.org/pdf/1703.09507.pdf
-        return after_gt, after, a_inv, before_gt
+        return after_gt, after, a_inv
 
 
 def define_model(pretrained=True):

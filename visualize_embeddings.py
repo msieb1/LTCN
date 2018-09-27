@@ -26,11 +26,11 @@ conf = Config()
 
 sys.path.append(conf.TCN_PATH)
 # from tcn import define_model_depth as define_model # different model architectures - fix at some p$
-from tcn import define_model as define_model # different model architectures - fix at some point bec$
-
+#from tcn import define_model as define_model # different model architectures - fix at some point bec$
+from inv_tcn import define_model
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1, 2, 4"
+os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1, 2"
 
 EXP_DIR = conf.EXP_DIR
 EXP_NAME = conf.EXP_NAME

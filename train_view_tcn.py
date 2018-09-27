@@ -8,6 +8,7 @@ import numpy as np
 import pickle
 import sys
 import datetime
+import math
 sys.path.append('./utils')
 
 from torch import optim
@@ -16,9 +17,9 @@ from torch import multiprocessing
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.builders import MultiViewBuilder 
+from utils.builders import TwoViewEulerBuilder as TwoViewBuilder 
 from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped, \
-            create_rot_from_vector, rotationMatrixToEulerAngles, isRotationMatrix, eulerAnglesToRotationMatrix
+        create_rot_from_vector, rotationMatrixToEulerAngles, isRotationMatrix, eulerAnglesToRotationMatrix 
 from utils.vocabulary import Vocabulary
 from view_tcn import define_model
 from ipdb import set_trace
@@ -39,11 +40,12 @@ from config import Config_Isaac_Server as Config # Import approriate config
 conf = Config()
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1,2,3"
+os.environ["CUDA_VISIBLE_DEVICES"]= "1,2,3"
 
 IMAGE_SIZE = (299, 299)
 ITERATE_OVER_TRIPLETS = 1 
 N_PREV_FRAMES = 1
+ACTION_DIM = 4
 
 EXP_NAME = conf.EXP_NAME
 #EXP_DIR = os.path.join('/home/msieb/data/tcn_data/experiments', EXP_NAME)
@@ -51,11 +53,11 @@ EXP_NAME = conf.EXP_NAME
 EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 USE_CUDA = conf.USE_CUDA
-NUM_VIEWS = conf.NUM_VIEWS
-SAMPLE_SIZE = 10
-TRAIN_SEQS_PER_EPOCH = 10 
-VAL_SEQS = 5 
-builder = MultiViewBuilder
+NUM_VIEWS = conf.NUM_VIEWS 
+SAMPLE_SIZE = 50 
+TRAIN_SEQS_PER_EPOCH = 2  
+VAL_SEQS = 4 
+builder = TwoViewBuilder
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
@@ -64,7 +66,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--start-epoch', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--save-every', type=int, default=5)
+    parser.add_argument('--save-every', type=int, default=10)
     parser.add_argument('--model-folder', type=str, default=join(EXP_DIR, EXP_NAME,'trained_models', MODEL_FOLDER, time_stamped()))
     parser.add_argument('--load-model', type=str, required=False)
     # parser.add_argument('--train-directory', type=str, default='./data/multiview-pouring/train/')
@@ -73,7 +75,7 @@ def get_args():
 
     parser.add_argument('--validation-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/valid/'))
 
-    parser.add_argument('--minibatch-size', type=int, default=16)
+    parser.add_argument('--minibatch-size', type=int, default=4)
     parser.add_argument('--margin', type=float, default=2.0)
     parser.add_argument('--model-name', type=str, default='tcn')
     parser.add_argument('--log-file', type=str, default='./out.log')
@@ -100,44 +102,116 @@ validation_set = [validation_builder.build_set() for i in range(VAL_SEQS)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
 
+def apply(func, M):
+        tList = [func(m) for m in torch.unbind(M, dim=0) ]
+        res = torch.stack(tList, dim=0)
+        return res 
 
+def geodesic_dist(R1, R2):
+    mult = torch.matmul(torch.transpose(R1, dim0=1, dim1=2), R2)
+    diagonals = torch.mul(mult, torch.eye(3).cuda())
+    trace = torch.sum(torch.sum(diagonals, dim=1), dim=1)
+    dist = torch.acos((trace - 1) / 2.0) # implements geodesic distance of two rotation matrix as loss
+    return dist
+def norm_sincos(sin, cos):
+    stacked_ = torch.cat((sin[None], cos[None]))
+    stacked = stacked_ / torch.norm(stacked_)
+    return stacked[0], stacked[1]
 
-def loss_fn(tcn, minibatch, lambd=0.1):
+def sincos2rotm(a_pred):
+    # copy of matlab                                                                                        
+    # R = [  cy*cz   sy*sx*cz-sz*cx    sy*cx*cz+sz*sx                                                       
+    #        cy*sz   sy*sx*sz+cz*cx    sy*cx*sz-cz*sx                                                       
+    #        -sy            cy*sx             cy*cx]                                                        
+    sinx, cosx = norm_sincos(a_pred[0], a_pred[1]) 
+    siny, cosy = norm_sincos(a_pred[2], a_pred[3]) 
+    sinz, cosz = norm_sincos(a_pred[4], a_pred[5]) 
+    r11 = cosy*cosz
+    r12 = sinx*siny*cosz - cosx*sinz
+    r13 = cosx*siny*cosz + sinx*sinz
+    r21 = cosy*sinz
+    r22 = sinx*siny*sinz + cosx*cosz
+    r23 = cosx*siny*sinz - sinx*cosz
+    r31 = -siny
+    r32 = sinx*cosy
+    r33 = cosx*cosy
+    r1 = torch.cat([r11[None],r12[None],r13[None]])
+    r2 = torch.cat([r21[None],r22[None],r23[None]])
+    r3 = torch.cat([r31[None],r32[None],r33[None]])
+    R = torch.stack((r1, r2, r3), dim=0)
+    assert isRotationMatrix(R.data.cpu().numpy())
+    return R 
 
+def axisAngletoRotationMatrix(a):
+    v = a[:-1]
+    theta = a[-1]
+    r11 += (-v[2]**2 - v[1]**2)*(1-torch.cos(theta)) + 0*torch.sin(theta) 
+    r12 += (v[0] * v[1])*(1-torch.cos(theta)) - v[2] * torch.sin(theta) 
+    r13 += (v[0] * v[2])*(1-torch.cos(theta)) + v[1] * torch.sin(theta)
+    r21 += (v[0] * v[1])*(1-torch.cos(theta)) + v[2] * torch.sin(theta)
+    r22 += (-v[2]**2 - v[0]**2)*(1-torch.cos(theta)) + 0 * torch.sin(theta)
+    r23 += (v[1] * v[2])*(1-torch.cos(theta))  - v[0] * torch.sin(theta)
+    r31 += (v[0] * v[2])*(1-torch.cos(theta))  - v[1] * torch.sin(theta)
+    r32 += (v[1] * v[2])*(1-torch.cos(theta)) + v[0] * torch.sin(theta)
+    r33 += (-v[1]**2 - v[0]**2)*(1-torch.cos(theta)) + 0 * torch.sin(theta)
+    r1 = torch.cat([r11[None],r12[None],r13[None]])
+    r2 = torch.cat([r21[None],r22[None],r23[None]])
+    r3 = torch.cat([r31[None],r32[None],r33[None]])
+    R = torch.stack((r1, r2, r3), dim=0)
+    assert isRotationMatrix(R.data.cpu().numpy())
+    return R
+
+def loss_rotation(tcn, minibatch, lambd=0.1):
     if USE_CUDA:
        anchor_frames = minibatch[0].cuda()
-       anchor_rots = minibatch[1].cuda()
+       anchor_rots = minibatch[1].cuda() # load as 3x3 rotation matrix
     
-    features_after_gt, features_after_pred, anchor_rot_pred = tcn(anchor_frames, anchor_rots)
-    #delta_rot_pred = create_rot_from_vector(anchor_rot_pred)    
-    #delta_rot_pred = np.reshape(delta_rot_pred, -1)
-    delta_rot_pred = anchor_rot_pred
-    inv_loss = torch.nn.L1Loss()(delta_rot_pred, anchor_rots) 
-    features_after_gt.detach_()
-    fwd_loss = torch.nn.L1Loss()(features_after_pred, features_after_gt)
-    loss = inv_loss + 0.1*fwd_loss
-    return loss, fwd_loss, inv_loss
+    features_second_view_gt, a_pred, features_first_view_gt = tcn(anchor_frames)
+    rots_pred = apply(sincos2rotm, a_pred)
+    set_trace()
+    dist = geodesic_dist(anchor_rots, rots_pred)
+    loss = dist.mean()
+    return loss
+
+def loss_euler(tcn, minibatch, lambd=0.1):
+    if USE_CUDA:
+       anchor_frames = minibatch[0].cuda()
+       #anchor_euler_reparam = minibatch[1].cuda() # load as 3x3 rotation matrix
+       anchor_rots = minibatch[1].cuda() # load as 3x3 rotation matrix
+         
+    features_second_view_gt, a_pred, features_first_view_gt = tcn(anchor_frames) 
+    rots_pred = apply(axisAngletoRotationMatrix, a_pred)
+    dist = geodesic_dist(anchor_rots, rots_pred)
+    loss = dist.mean()
+    return loss
+
+def loss_l1(tcn, minibatch, lambd=0.1):
+    if USE_CUDA:
+       anchor_frames = minibatch[0].cuda()
+       #anchor_euler_reparam = minibatch[1].cuda() # load as 3x3 rotation matrix
+       anchor_rots = minibatch[1].cuda() # load as 3x3 rotation matrix
+         
+    features_second_view_gt, a_pred, features_first_view_gt = tcn(anchor_frames) 
+    loss = torch.nn.SmoothL1Loss()(a_pred, rots_pred) 
+    return loss
+
+    
+loss_fn = loss_l1_
 
 def validate(tcn, use_cuda, n_calls):
     # Run model on validation data and log results
     data_loader = DataLoader(
                     validation_set, 
-                    batch_size=16, 
+                    batch_size=8, 
                     shuffle=False, 
                     pin_memory=use_cuda,
                     )
     losses = []
-    fwd_losses = []
-    inv_losses = []
     for minibatch in data_loader:
         # frames = Variable(minibatch, require_grad=False)
-        loss, fwd_loss, inv_loss  = loss_fn(tcn, minibatch)
+        loss = loss_fn(tcn, minibatch)
         losses.append(loss.data.cpu().numpy())
-        fwd_losses.append(fwd_loss.data.cpu().numpy())
-        inv_losses.append(inv_loss.data.cpu().numpy())
         
-    writer.add_scalar('data/valid_fwd_loss', np.mean(fwd_losses), n_calls)
-    writer.add_scalar('data/valid_inv_loss', np.mean(inv_losses), n_calls)
     writer.add_scalar('data/valid_loss', np.mean(losses), n_calls)
     n_calls += 1
     loss = np.mean(losses)
@@ -165,7 +239,7 @@ def build_set(queue, triplet_builder, log):
         queue.put(dataset)
 
 def create_model(use_cuda):
-    tcn = define_model(use_cuda)
+    tcn = define_model(use_cuda, action_dim=ACTION_DIM)
     # tcn = PosNet()
     if args.load_model:
         model_path = os.path.join(
@@ -184,6 +258,12 @@ def main():
     use_cuda = torch.cuda.is_available()
 
     tcn = create_model(use_cuda)
+
+    dummy_state = Variable(torch.rand(1,2,3,299,299).cuda() )
+    dummy_action = Variable(torch.rand(1,3).cuda())
+    writer.add_graph(tcn, (dummy_state, ))
+
+
     tcn = torch.nn.DataParallel(tcn, device_ids=range(torch.cuda.device_count()))
     triplet_builder = builder(args.n_views, \
         args.train_directory, IMAGE_SIZE, args, sample_size=SAMPLE_SIZE)
@@ -195,7 +275,7 @@ def main():
     optimizer = optim.SGD(tcn.parameters(), lr=args.lr_start, momentum=0.9)
     # This will diminish the learning rate at the milestones.
     # 0.1, 0.01, 0.001
-    learning_rate_scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[200,500, 1000], gamma=0.1)
+    learning_rate_scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[20,50, 100], gamma=0.1)
 
     criterion = nn.CrossEntropyLoss()
 
@@ -219,29 +299,23 @@ def main():
         )
         
         losses = []
-        fwd_losses = []
-        inv_losses = []
         for _ in range(0, ITERATE_OVER_TRIPLETS):
             for minibatch in data_loader:
                 # frames = Variable(minibatch, require_grad=False)
-                loss, fwd_loss, inv_loss  = loss_fn(tcn, minibatch)
+                loss = loss_fn(tcn, minibatch)
                 
                 losses.append(loss.data.cpu().numpy()) 
-                fwd_losses.append(fwd_loss.data.cpu().numpy()) 
-                inv_losses.append(inv_loss.data.cpu().numpy()) 
                 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-        writer.add_scalar('data/train_fwd_loss', np.mean(fwd_losses), n_iter)
-        writer.add_scalar('data/train_inv_loss', np.mean(inv_losses), n_iter)
         writer.add_scalar('data/train_loss', np.mean(losses), n_iter)
         n_iter += 1  
         trn_losses_.append(np.mean(losses))
         logger.info('train loss: ', np.mean(losses))
         writer.add_image('frame_1', minibatch[0][0], 0)
-        writer.add_image('frame_2', minibatch[0][1],0)
-        writer.add_image('frame_3', minibatch[0][2],0)
+        #writer.add_image('frame_2', minibatch[0][1],0)
+        #writer.add_image('frame_3', minibatch[0][2],0)
         if epoch % 1 == 0:
             loss, n_valid_iter = validate(tcn, use_cuda, n_valid_iter)
             val_losses_.append(loss)

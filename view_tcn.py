@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from torch import nn
 from torch.nn import functional as F
 from torchvision import models
@@ -6,6 +7,7 @@ from torch.autograd import Function
 import torchvision.models as models
 from torch.nn.utils.rnn import pack_padded_sequence
 from copy import deepcopy as copy
+import math
 from pdb import set_trace
 
 VOCAB_SIZE = 2
@@ -76,8 +78,10 @@ class PosNet(EmbeddingNet):
         return self.normalize(x) * self.alpha
         
 class TCNModel(EmbeddingNet):
-    def __init__(self, inception):  
+    def __init__(self, inception, action_dim=6):  
         super(TCNModel, self).__init__()
+        self.action_dim = action_dim
+        self.state_dim = 32
         self.transform_input = True
         self.Conv2d_1a_3x3 = inception.Conv2d_1a_3x3
         self.Conv2d_2a_3x3 = inception.Conv2d_2a_3x3
@@ -98,18 +102,21 @@ class TCNModel(EmbeddingNet):
         self.Conv2d_6a_3x3 = BatchNormConv2d(288, 100, kernel_size=3, stride=1)
         self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
         self.SpatialSoftmax = nn.Softmax2d()
-        self.FullyConnected7a = Dense(31 * 31 * 20, 32)
-        self.FullyConnectedConcat = Dense(64, 256)
-        self.FullyConnectedPose = Dense(256, 6)
+        self.FullyConnected7a = Dense(31 * 31 * 20, self.state_dim)
+        self.FullyConnectedConcat = Dense(2*self.state_dim, 256)
+        self.FullyConnectedPose1 = Dense(256, 512)
+        self.FullyConnectedPose2 = Dense(512, 256)
+        self.FullyConnectedPose3 = Dense(256, self.action_dim)
+        self.tanh = torch.nn.Tanh()
         
-        self.FullyConnectedAction1 = Dense(38, 256) # 32 + 9 (Rot, find out if 6 is possible, maybe only u and v and discard w, 3rd column of R?)
+        self.FullyConnectedAction1 = Dense(self.state_dim + self.action_dim, 256)
         self.FullyConnectedAction2 = Dense(256,512)
         self.FullyConnectedAction3 = Dense(512, 256)
         self.FullyConnectedAction4 = Dense(256, 32)
-        
-        self.alpha = 10.0
 
-    def forward(self, x, a):
+        self.alpha = 10.0
+    
+    def forward(self, x):
         if self.transform_input:
             x = x.clone()
             x[:, :, 0] = x[:, :, 0] * (0.229 / 0.5) + (0.485 - 0.5) / 0.5
@@ -144,35 +151,150 @@ class TCNModel(EmbeddingNet):
         # 31 x 31 x 20
         x = self.Conv2d_6b_3x3(x)
         # 31 x 31 x 20
-        x = self.SpatialSoftmax(x)
+        #x = self.SpatialSoftmax(x)
         # 32
         x = self.FullyConnected7a(x.view(x.size()[0], -1))
         # Reshape to separate inputs
         xx = x.view(batch_size, frames_per_batch, -1)
 
-        # Split input frames, x2 is before, x1 is after imasge
+        # Split input frames, x1 is first view, x2 is second view
         x1 = xx[:, 0]
         x2 = xx[:, 1]
-        # Build forward model
-        ax = torch.cat((a, x2), 1)    # x is features_before, a applied action at that time t 
-        ax = self.FullyConnectedAction1(ax)
-        ax = self.FullyConnectedAction2(ax)
-        ax = self.FullyConnectedAction3(ax)
-        after = self.FullyConnectedAction4(ax)
         # Build inverse model
         # Concatenate resulting features to 64d-vector
         x_cat = torch.cat((x1, x2), 1)     
         x_cat = self.FullyConnectedConcat(x_cat)
-        a_inv = self.FullyConnectedPose(x_cat)
-        u = a_inv[:, :3]
-        v = a_inv[:, 3:]
-        a_inv = torch.cat((self.normalize(u), self.normalize(v)), dim=1)
-        after_gt = x1
-        # Normalize output such that output lives on unit sphere.
-        # Multiply by alpha as in https://arxiv.org/pdf/1703.09507.pdf
-        return after_gt, after, a_inv
+        #a_inv = self.FullyConnectedPose1(x_cat)
+        #a_inv = self.FullyConnectedPose2(a_inv)
+        a_pred = self.FullyConnectedPose3(x_cat)
+        a_pred = self.tanh(a_pred)
+        
+        second_view_gt = x2
+        first_view_gt = x1
+        # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
+       
+        return second_view_gt, a_pred, first_view_gt
 
+    def forward(self, x):
+        if self.transform_input:
+            x = x.clone()
+            x[:, :, 0] = x[:, :, 0] * (0.229 / 0.5) + (0.485 - 0.5) / 0.5
+            x[:, :,  1] = x[:, :, 1] * (0.224 / 0.5) + (0.456 - 0.5) / 0.5
+            x[:, :, 2] = x[:, :, 2] * (0.225 / 0.5) + (0.406 - 0.5) / 0.5
+        # 299 x 299 x 3
+        batch_size = x.size()[0]
+        frames_per_batch = x.size()[1] # should be two to learn inverse model, frame_t and frame_t+1 for prediction action a_t
 
-def define_model(pretrained=True):
-    return TCNModel(models.inception_v3(pretrained=pretrained))
+        x = x.view(x.size()[0] * x.size()[1], 3, 299, 299)
+        x = self.Conv2d_1a_3x3(x)
+        # 149 x 149 x 32
+        x = self.Conv2d_2a_3x3(x)
+        # 147 x 147 x 32
+        x = self.Conv2d_2b_3x3(x)
+        # 147 x 147 x 64
+        x = F.max_pool2d(x, kernel_size=3, stride=2)
+        # 73 x 73 x 64
+        x = self.Conv2d_3b_1x1(x)
+        # 73 x 73 x 80
+        x = self.Conv2d_4a_3x3(x)
+        # 71 x 71 x 192
+        x = F.max_pool2d(x, kernel_size=3, stride=2)
+        # 35 x 35 x 192
+        x = self.Mixed_5b(x)
+        # 35 x 35 x 256
+        x = self.Mixed_5c(x)
+        # 35 x 35 x 288
+        y = self.Mixed_5d(x)
+        # 33 x 33 x 100
+        x = self.Conv2d_6a_3x3(y)
+        # 31 x 31 x 20
+        x = self.Conv2d_6b_3x3(x)
+        # 31 x 31 x 20
+        #x = self.SpatialSoftmax(x)
+        # 32
+        x = self.FullyConnected7a(x.view(x.size()[0], -1))
+        # Reshape to separate inputs
+        xx = x.view(batch_size, frames_per_batch, -1)
+
+        # Split input frames, x1 is first view, x2 is second view
+        x1 = xx[:, 0]
+        x2 = xx[:, 1]
+        # Build inverse model
+        # Concatenate resulting features to 64d-vector
+        x_cat = torch.cat((x1, x2), 1)     
+        x_cat = self.FullyConnectedConcat(x_cat)
+        #a_inv = self.FullyConnectedPose1(x_cat)
+        #a_inv = self.FullyConnectedPose2(a_inv)
+        a_pred_ = self.FullyConnectedPose3(x_cat)
+        v = self.normalize(a_pred_[:, :-1])
+        theta = (self.tanh(a_pred_[:, -1])[:, None] + 1.0) * torch.Tensor(np.array([math.pi])).cuda() / 2.0
+        a_pred = torch.cat((v, theta), 1)
+        # investigate use of tanh to force [-1, 1] instead of normalizing
+        second_view_gt = x2
+        first_view_gt = x1
+        # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
+       
+        return second_view_gt, a_pred, first_view_gt
+
+    def forward_deprecated(self, x):
+        if self.transform_input:
+            x = x.clone()
+            x[:, :, 0] = x[:, :, 0] * (0.229 / 0.5) + (0.485 - 0.5) / 0.5
+            x[:, :,  1] = x[:, :, 1] * (0.224 / 0.5) + (0.456 - 0.5) / 0.5
+            x[:, :, 2] = x[:, :, 2] * (0.225 / 0.5) + (0.406 - 0.5) / 0.5
+        # 299 x 299 x 3
+        batch_size = x.size()[0]
+        frames_per_batch = x.size()[1] # should be two to learn inverse model, frame_t and frame_t+1 for prediction action a_t
+
+        x = x.view(x.size()[0] * x.size()[1], 3, 299, 299)
+        x = self.Conv2d_1a_3x3(x)
+        # 149 x 149 x 32
+        x = self.Conv2d_2a_3x3(x)
+        # 147 x 147 x 32
+        x = self.Conv2d_2b_3x3(x)
+        # 147 x 147 x 64
+        x = F.max_pool2d(x, kernel_size=3, stride=2)
+        # 73 x 73 x 64
+        x = self.Conv2d_3b_1x1(x)
+        # 73 x 73 x 80
+        x = self.Conv2d_4a_3x3(x)
+        # 71 x 71 x 192
+        x = F.max_pool2d(x, kernel_size=3, stride=2)
+        # 35 x 35 x 192
+        x = self.Mixed_5b(x)
+        # 35 x 35 x 256
+        x = self.Mixed_5c(x)
+        # 35 x 35 x 288
+        y = self.Mixed_5d(x)
+        # 33 x 33 x 100
+        x = self.Conv2d_6a_3x3(y)
+        # 31 x 31 x 20
+        x = self.Conv2d_6b_3x3(x)
+        # 31 x 31 x 20
+        #x = self.SpatialSoftmax(x)
+        # 32
+        x = self.FullyConnected7a(x.view(x.size()[0], -1))
+        # Reshape to separate inputs
+        xx = x.view(batch_size, frames_per_batch, -1)
+
+        # Split input frames, x1 is first view, x2 is second view
+        x1 = xx[:, 0]
+        x2 = xx[:, 1]
+        # Build forward model
+        # Build inverse model
+        # Concatenate resulting features to 64d-vector
+        x_cat = torch.cat((x1, x2), 1)     
+        x_cat = self.FullyConnectedConcat(x_cat)
+        #a_inv = self.FullyConnectedPose1(x_cat)
+        #a_inv = self.FullyConnectedPose2(a_inv)
+        a_pred = self.FullyConnectedPose3(x_cat)
+        # investigate use of tanh to force [-1, 1] instead of normalizing
+        second_view_gt = x2
+        first_view_gt = x1
+        # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
+       
+        return second_view_gt, self.normalize(a_pred), first_view_gt
+
+def define_model(pretrained=True, action_dim=6):
+    return TCNModel(models.inception_v3(pretrained=pretrained), action_dim)
 

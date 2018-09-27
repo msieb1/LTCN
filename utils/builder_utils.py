@@ -414,3 +414,5 @@ def create_rot_from_vector(vector):
     R = np.hstack([u[:,None], v[:,None], w[:,None]])
     assert isRotationMatrix(R)
     return R
+
+

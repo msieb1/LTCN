@@ -16,6 +16,7 @@ import cv2
 import matplotlib.pyplot as plt
 from scipy import ndimage as ndi
 import time
+from pyquaternion import Quaternion
 
 from builder_utils import distance, view_image, write_to_csv, ensure_folder, resize_frame, write_video, \
                 read_video, read_extracted_rcnn_results, read_caption, ls_directories, ls, ls_unparsed_txt, ls_npy, \
@@ -26,7 +27,7 @@ from plot_utils import concat_frames_nosave
 
 sys.path.append('/home/max/projects/gps-lfd') 
 sys.path.append('/home/msieb/projects/gps-lfd')
-from config import Config_Isaac_Server as Config, Camera_Config # Import approriate config
+from config import Config_Isaac_Server as Config, Multi_Camera_Config as Camera_Config # Import approriate config
 conf = Config()
 
 # Camera Config
@@ -304,16 +305,66 @@ class PoseMultiViewTripletBuilder(MultiViewTripletBuilder):
         # Second argument is labels. Not used.
         return TensorDataset(triplets, pose_triplets)
 
-class MultiViewBuilder(MultiViewTripletBuilder):
+class TwoViewBuilder(MultiViewTripletBuilder):
     def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500):
-        super(MultiViewBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size)
+        super(TwoViewBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size)
+        self.rots = self.get_rot() 
     
+    def _read_video_dir(self, video_directory):
+        self._video_directory = video_directory
+        filenames = ls(video_directory)
+        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if f.endswith('.mp4') and int(f.split('view')[-1].split('.mp4')[0]) < 5]
+        # for path in self.video_paths:
+        #     print(path)
+        self.sequence_count = int(len(self.video_paths) / self.n_views)
+
     @functools.lru_cache(maxsize=1)
-    def get_rot(self, index):
+    def get_rot(self):
         views = []
         for i in range(self.n_views):
             views.append(ROT_MATRICES[i])
         return views
+    
+    def sample_triplet(self, snaps, rot):
+        anchor_frames = np.zeros((2, 3, 299, 299))
+        anchor_index = self.sample_anchor_frame_index()
+        positive_index = anchor_index
+        # negative_index = self.sample_negative_frame_index(anchor_index)
+        # random sample anchor view,and positive view
+        view_set = set(range(self.n_views))
+        anchor_view = np.random.choice(np.array(list(view_set)))
+        view_set.remove(anchor_view)
+        positive_view = np.random.choice(np.array(list(view_set)))
+        #negative_view = anchor_view # negative example comes from same view INQUIRE TODO
+        anchor_frames[0] = snaps[anchor_view][anchor_index]
+        anchor_frames[1] = snaps[positive_view][positive_index]
+        #negative_frame = snaps[negative_view][negative_index]
+        # what shape has pose? T x 7?
+        delta_rot = rot[positive_view].dot(rot[anchor_view].T)
+        #delta_euler = rotationMatrixToEulerAngles(delta_rot)
+        #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
+        assert isRotationMatrix(delta_rot)
+        return (torch.Tensor(anchor_frames), torch.Tensor(delta_rot))
+
+    def build_set(self):
+        frames = torch.Tensor(self.sample_size, 2, 3, *self.frame_size)
+        deltas_rot = torch.Tensor(self.sample_size, 3, 3)
+        snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
+        #print("building set from video sequence, loaded paths: {}".format(debug_paths))
+        for i in range(0, self.sample_size):
+            anchor_frame, delta_rot = self.sample_triplet(snaps, self.rots)
+
+            frames[i, 0, :, :, :] = anchor_frame[0]
+            frames[i, 1, :, :, :] = anchor_frame[1]
+            deltas_rot[i] = delta_rot
+        self.sequence_index = (self.sequence_index + 1) % self.sequence_count
+        # Second argument is labels. Not used.
+        return TensorDataset(frames, deltas_rot)
+
+class TwoViewEulerBuilder(TwoViewBuilder):
+    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500):
+        super(TwoViewEulerBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size)
+    
 
     def sample_triplet(self, snaps, rot):
         anchor_frames = np.zeros((2, 3, 299, 299))
@@ -326,30 +377,43 @@ class MultiViewBuilder(MultiViewTripletBuilder):
         view_set.remove(anchor_view)
         positive_view = np.random.choice(np.array(list(view_set)))
         #negative_view = anchor_view # negative example comes from same view INQUIRE TODO
-
+        #print("anchor view: {}, pos view: {}".format(anchor_view, positive_view))
         anchor_frames[0] = snaps[anchor_view][anchor_index]
         anchor_frames[1] = snaps[positive_view][positive_index]
         #negative_frame = snaps[negative_view][negative_index]
         # what shape has pose? T x 7?
         delta_rot = rot[positive_view].dot(rot[anchor_view].T)
-        delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
-        return (torch.Tensor(anchor_frames), torch.Tensor(delta_rot))
+        assert isRotationMatrix(delta_rot)
+        delta_euler = rotationMatrixToEulerAngles(delta_rot)
+        yaw = delta_euler[0]
+        pitch = delta_euler[1]
+        roll = delta_euler[2]
+        delta_euler_reparam = np.array([
+                                np.sin(yaw),
+                                np.cos(yaw),
+                                np.sin(pitch),
+                                np.cos(pitch),
+                                np.sin(roll),
+                                np.cos(roll),
+                                ])
+        #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
+        return (torch.Tensor(anchor_frames), torch.Tensor(delta_euler_reparam))
 
     def build_set(self):
         frames = torch.Tensor(self.sample_size, 2, 3, *self.frame_size)
-        delta_rots = torch.Tensor(self.sample_size, 6)
-        rot = self.get_rot(self.sequence_index * self.n_views)
+        deltas_euler_reparam = torch.Tensor(self.sample_size, 6)
         snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
         #print("building set from video sequence, loaded paths: {}".format(debug_paths))
         for i in range(0, self.sample_size):
-            anchor_frame, delta_rot = self.sample_triplet(snaps, rot)
+            anchor_frame, delta_euler_reparam = self.sample_triplet(snaps, self.rots)
 
             frames[i, 0, :, :, :] = anchor_frame[0]
             frames[i, 1, :, :, :] = anchor_frame[1]
-            delta_rots[i, :] = delta_rot
+
+            deltas_euler_reparam[i] = delta_euler_reparam
         self.sequence_index = (self.sequence_index + 1) % self.sequence_count
         # Second argument is labels. Not used.
-        return TensorDataset(frames, delta_rots)
+        return TensorDataset(frames, deltas_euler_reparam)
 
 class SingleViewDepthTripletBuilder(SingleViewTripletBuilder):
     def __init__(self, view, video_directory, depth_video_directory, image_size, cli_args, sample_size=500):
@@ -769,12 +833,11 @@ class SingleViewDepthTripletExtractedBuilder(SingleViewDepthTripletBuilder):
     def sample_negative_frame_index(self, anchor_index, video):
         return np.random.choice(self.negative_frame_indices(anchor_index, video))
 
-class MultiFrameBuilder(object):
+class TwoFrameInverseBuilder(object):
     # Assumes that all videos/views are trained as single training examples, i.e. every view is its own sample
-    def __init__(self, view, n_prev_frames, video_directory, image_size, cli_args, sample_size=500):
+    def __init__(self, view, video_directory, image_size, cli_args, sample_size=500):
         self.frame_size = image_size
         self.view = view
-        self.n_prev_frames = n_prev_frames
         self._read_video_dir(video_directory)
         self._count_frames()
         # The negative example has to be from outside the buffer window. Taken from both sides of
@@ -784,10 +847,11 @@ class MultiFrameBuilder(object):
         self.sample_size = sample_size
         self.video_index = 0
         self.skipped_frames = 4
+
     def _read_video_dir(self, video_directory):
         self._video_directory = video_directory
         filenames = ls(video_directory)
-        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames]
+        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if int(f.split('_')[0]) ==  self.view]
         # for path in self.video_paths:
         #     print(path)
         self.video_count = len(self.video_paths)
@@ -800,50 +864,52 @@ class MultiFrameBuilder(object):
         for i, frames in enumerate(self.frame_lengths):
             prev = self.cumulative_lengths[i-1]
             self.cumulative_lengths[i] = prev + frames
-    
+   
     @functools.lru_cache(maxsize=1)
-    def get_delta_pose(self, index, type='ee'):
+    def get_delta_euler(self, index, type='ee'):
         # pose is (T, 4)
         seqname = self.video_paths[index].split('/')[-1].split('_')[0]
         filepath = '/'.join(self.video_paths[index].split('/')[:-1]) + '/'  + seqname + '_' + type + '.npy'
         pose = np.load(filepath)[:, -4:]
-        pose[1+self.skipped_frames:] -= pose[:-1-self.skipped_frames]
-        pose[0+self.skipped_frames] *= 0
-        delta_pose = pose
-        return delta_pose
+        delta_euler = np.zeros((len(pose), 3))
+        for i in range(len(pose) - 1 - self.skipped_frames):
+            pose[:, [0,3]] = pose[:, [3, 0]]
+            q1 = Quaternion(pose[i])
+            q2 = Quaternion(pose[i + 1 + self.skipped_frames])
+            delta_q = q2*q1.inverse
+            delta_euler[i] = rotationMatrixToEulerAngles(delta_q.rotation_matrix)
+        return delta_euler
 
     @functools.lru_cache(maxsize=1)
     def get_video(self, index):
         return read_video(self.video_paths[index], self.frame_size)
 
-    def sample(self, snaps, delta_pose):
-        anchor_frames = np.zeros((self.n_prev_frames + 1, 3, 299, 299))
+    def sample(self, snaps, delta_euler):
+        anchor_frames = np.zeros((1 + 1, 3, 299, 299))
         anchor_index = self.sample_anchor_frame_index()
         anchor_frames[0] = snaps[anchor_index]
-        anchor_delta_pose = delta_pose[anchor_index]
+        anchor_delta_euler = delta_euler[anchor_index]
 
-        for ii in range(1, self.n_prev_frames+1):    
-            anchor_frames[ii] = snaps[anchor_index-self.skipped_frames-ii]
-
-        return (torch.Tensor(anchor_frames), torch.Tensor(anchor_delta_pose))
+        anchor_frames[1] = snaps[anchor_index + 1 + self.skipped_frames]
+        return (torch.Tensor(anchor_frames), torch.Tensor(anchor_delta_euler))
             
 
     def build_set(self):
-        frames = torch.Tensor(self.sample_size, self.n_prev_frames + 1, 3, *self.frame_size)
-        delta_poses = torch.Tensor(self.sample_size, 4)
+        frames = torch.Tensor(self.sample_size, 1 + 1, 3, *self.frame_size)
+        delta_eulers = torch.Tensor(self.sample_size, 3)
         #print(self.video_paths[self.video_index])
         snap = self.get_video(self.video_index)
-        delta_pose = self.get_delta_pose(self.video_index)
+        delta_euler = self.get_delta_euler(self.video_index)
         for i in range(0, self.sample_size):
-            anchor_frame, anchor_delta_pose = self.sample(snap, delta_pose)
+            anchor_frame, anchor_delta_euler = self.sample(snap, delta_euler)
             frames[i, :, :, :] = anchor_frame
-            delta_poses[i, :] = anchor_delta_pose
+            delta_eulers[i, :] = anchor_delta_euler
         self.video_index = (self.video_index + 1) % self.video_count
         # Second argument is labels. Not used.
-        return TensorDataset(frames, delta_poses)
+        return TensorDataset(frames, delta_eulers)
 
     def sample_anchor_frame_index(self):
-        arange = np.arange(0 + self.n_prev_frames + self.skipped_frames, self.frame_lengths[self.video_index])
+        arange = np.arange(0 , self.frame_lengths[self.video_index] - 1 - self.skipped_frames)
         return np.random.choice(arange)
 
 
