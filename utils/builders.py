@@ -1,6 +1,7 @@
 import os
 import sys
 import functools
+
 import imageio
 import numpy as np
 from PIL import Image
@@ -20,14 +21,14 @@ from pyquaternion import Quaternion
 
 from builder_utils import distance, view_image, write_to_csv, ensure_folder, resize_frame, write_video, \
                 read_video, read_extracted_rcnn_results, read_caption, ls_directories, ls, ls_unparsed_txt, ls_npy, \
-                ls_txt, ls_view, read_extracted_video, Logger, ls_extracted, crop_box, crop_uniform_box, get_box_center, \
-                create_rot_from_vector, rotationMatrixToEulerAngles, isRotationMatrix, eulerAnglesToRotationMatrix
+                ls_txt, ls_view, read_extracted_video, Logger, ls_extracted, crop_box, crop_uniform_box, get_box_center
+from rot_utils import create_rot_from_vector, rotationMatrixToEulerAngles, isRotationMatrix, eulerAnglesToRotationMatrix
 from plot_utils import concat_frames_nosave
 
-
+##### PATHS #####
 sys.path.append('/home/max/projects/gps-lfd') 
 sys.path.append('/home/msieb/projects/gps-lfd')
-from config import Config_Isaac_Server as Config, Multi_Camera_Config as Camera_Config # Import approriate config
+from config_server import Config_Isaac_Server as Config, Multi_Camera_Config as Camera_Config # Import approriate config
 conf = Config()
 
 # Camera Config
@@ -306,14 +307,29 @@ class PoseMultiViewTripletBuilder(MultiViewTripletBuilder):
         return TensorDataset(triplets, pose_triplets)
 
 class TwoViewBuilder(MultiViewTripletBuilder):
-    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500):
-        super(TwoViewBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size)
+    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500, n_seqs=10000):
+        self.frame_size = image_size
+        self.n_views = n_views
+        self.n_seqs = n_seqs
+        self._read_video_dir(video_directory)
+
+        self._count_frames()
+        # The negative example has to be from outside the buffer window. Taken from both sides of
+        # ihe frame.
+        self.negative_frame_margin = 10 
+        self.sequence_index = 0
+        self.cli_args = cli_args
+        self.sample_size = sample_size
         self.rots = self.get_rot() 
-    
+        
     def _read_video_dir(self, video_directory):
         self._video_directory = video_directory
         filenames = ls(video_directory)
-        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if f.endswith('.mp4') and int(f.split('view')[-1].split('.mp4')[0]) < 5]
+        self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if f.endswith('.mp4') and \
+                    int(f.split('view')[-1].split('.mp4')[0]) < self.n_views and \
+                    int(f.split('_')[0])  < self.n_seqs]
+        #print(self.video_paths)
+        print("Got {} video paths".format(len(self.video_paths)))
         # for path in self.video_paths:
         #     print(path)
         self.sequence_count = int(len(self.video_paths) / self.n_views)
@@ -361,6 +377,49 @@ class TwoViewBuilder(MultiViewTripletBuilder):
         # Second argument is labels. Not used.
         return TensorDataset(frames, deltas_rot)
 
+class TwoViewQuaternionBuilder(TwoViewBuilder):
+    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500, n_seqs=10000):
+        super(TwoViewQuaternionBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size, n_seqs)
+    
+    def sample_triplet(self, snaps, rot):
+        anchor_frames = np.zeros((2, 3, 299, 299))
+        anchor_index = self.sample_anchor_frame_index()
+        positive_index = anchor_index
+        # negative_index = self.sample_negative_frame_index(anchor_index)
+        # random sample anchor view,and positive view
+        view_set = set(range(self.n_views))
+        anchor_view = np.random.choice(np.array(list(view_set)))
+        view_set.remove(anchor_view)
+        positive_view = np.random.choice(np.array(list(view_set)))
+        #negative_view = anchor_view # negative example comes from same view INQUIRE TODO
+        anchor_frames[0] = snaps[anchor_view][anchor_index]
+        anchor_frames[1] = snaps[positive_view][positive_index]
+        #negative_frame = snaps[negative_view][negative_index]
+        # what shape has pose? T x 7?
+        delta_rot = rot[positive_view].dot(rot[anchor_view].T)
+        delta_quat = Quaternion(matrix=delta_rot)
+        delta_quat = delta_quat.elements
+        delta_quat /= np.linalg.norm(delta_quat)
+        #delta_euler = rotationMatrixToEulerAngles(delta_rot)
+        #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
+        assert isRotationMatrix(delta_rot)
+        return (torch.Tensor(anchor_frames), torch.Tensor(delta_quat))
+
+    def build_set(self):
+        frames = torch.Tensor(self.sample_size, 2, 3, *self.frame_size)
+        deltas_quat = torch.Tensor(self.sample_size, 4)
+        snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
+        #print("building set from video sequence, loaded paths: {}".format(debug_paths))
+        for i in range(0, self.sample_size):
+            anchor_frame, delta_quat = self.sample_triplet(snaps, self.rots)
+            frames[i, 0, :, :, :] = anchor_frame[0]
+            frames[i, 1, :, :, :] = anchor_frame[1]
+            deltas_quat[i] = delta_quat
+        self.sequence_index = (self.sequence_index + 1) % self.sequence_count
+        # Second argument is labels. Not used.
+        return TensorDataset(frames, deltas_quat)
+
+
 class TwoViewEulerBuilder(TwoViewBuilder):
     def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500):
         super(TwoViewEulerBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size)
@@ -384,18 +443,7 @@ class TwoViewEulerBuilder(TwoViewBuilder):
         # what shape has pose? T x 7?
         delta_rot = rot[positive_view].dot(rot[anchor_view].T)
         assert isRotationMatrix(delta_rot)
-        delta_euler = rotationMatrixToEulerAngles(delta_rot)
-        yaw = delta_euler[0]
-        pitch = delta_euler[1]
-        roll = delta_euler[2]
-        delta_euler_reparam = np.array([
-                                np.sin(yaw),
-                                np.cos(yaw),
-                                np.sin(pitch),
-                                np.cos(pitch),
-                                np.sin(roll),
-                                np.cos(roll),
-                                ])
+
         #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
         return (torch.Tensor(anchor_frames), torch.Tensor(delta_euler_reparam))
 

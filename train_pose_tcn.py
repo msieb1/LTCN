@@ -34,7 +34,7 @@ from utils.plot_utils import plot_mean
 
 sys.path.append('/home/max/projects/gps-lfd') 
 sys.path.append('/home/msieb/projects/gps-lfd')
-from config import Config_Isaac_Server as Config # Import approriate config
+from config_server import Config_Isaac_Server as Config # Import approriate config
 conf = Config()
 
 IMAGE_SIZE = (299, 299)
@@ -133,7 +133,7 @@ def loss_fn(tcn, minibatch):
         
         d_positive = distance(anchor_output, positive_output)
         d_negative = distance(anchor_output, negative_output)
-
+        set_trace()
         assert(d_positive.size()[0] == minibatch[0].size()[0])
         correct_with_margin = ((d_positive + args.margin) < d_negative).data.cpu().numpy().sum()
         correct_without_margin = (d_positive < d_negative).data.cpu().numpy().sum()
