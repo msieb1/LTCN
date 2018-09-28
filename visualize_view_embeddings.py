@@ -16,12 +16,14 @@ import imageio
 from PIL import Image
 from pdb import set_trace
 
-from utils.builder_utils import time_stamped, rotationMatrixToEulerAngles
+from utils.builder_utils import time_stamped
+sys.path.append('../general-utils')
+from rot_utils import rotationMatrixToEulerAngles
 
 sys.path.append('/home/max/projects/gps-lfd')
 sys.path.append('/home/msieb/projects/gps-lfd')
 #from config import Config as Config # Import approriate config
-from config import Config_Isaac_Server as Config # Import approriate config
+from config_server import Config_Isaac_Server as Config # Import approriate config
 conf = Config()
 
 sys.path.append(conf.TCN_PATH)
@@ -58,6 +60,7 @@ dt = 1/FPS
 USE_CUDA = conf.USE_CUDA
 SELECTED_SEQS = conf.SELECTED_SEQS
 EMBEDDING_VIZ_VIEWS = conf.EMBEDDING_VIZ_VIEWS
+ACTION_DIM = conf.ACTION_DIM
 
 print(SELECTED_SEQS)
 
@@ -68,7 +71,7 @@ def resize_frame(frame, out_size):
     return np.transpose(scaled, [2, 0, 1])
 
 def load_tcn_model(model_path, use_cuda=False):
-    tcn = define_model(use_cuda)
+    tcn = define_model(use_cuda, action_dim=ACTION_DIM)
     tcn = torch.nn.DataParallel(tcn, device_ids=range(1))
 
     # tcn = PosNet()
@@ -115,7 +118,7 @@ def main(args):
     for file in files:
         if SELECTED_SEQS is not None and file.split('_')[0] not in SELECTED_SEQS:    
             continue
-        if file.split('view')[1].split('.mp4')[0] not in EMBEDDING_VIZ_VIEWS:
+        if EMBEDDING_VIZ_VIEWS is not None and file.split('view')[1].split('.mp4')[0] not in EMBEDDING_VIZ_VIEWS:
             continue
         print("Processing ", file)
         reader = imageio.get_reader(join(RGB_PATH, file))
@@ -132,7 +135,7 @@ def main(args):
             rgb_buffer.append(im)
             depth_buffer.append(im_depth)
 
-        for i in range(0, len(reader)-1):
+        for i in range(0, len(reader)):
             #i += 1
             #if i % 5 != 0:
             #    continue
@@ -149,25 +152,28 @@ def main(args):
             resized_image_before = resize_frame(im_before, IMAGE_SIZE)[None, :]
             resized_depth_before = resize_frame(im_depth_before, IMAGE_SIZE)[None, :]
             # resized_depth = resize_frame(depth_rescaled[:, :, None], IMAGE_SIZE)[None, :]
-            frame_before = np.concatenate([resized_image_before[0], resized_depth_before[0, None, 0]], axis=0)
-           
-            frames = np.concatenate([resized_image_before, resized_image], axis=0)
+            #frames = np.concatenate(resized_image, axis=0)
+            frames = resized_image
             if USE_CUDA:
               state_embedding_second, a_pred, state_embedding_first  = tcn(torch.Tensor(frames[None]).cuda())
             else:
               state_embedding_second, a_pred, state_embedding_first = tcn(torch.Tensor(frames[None]))         
-            embeddings_episode_buffer.append(state_embedding_first.detach().cpu().numpy())
+            state_embedding_first = state_embedding_first.detach().cpu().numpy()
+            state_embedding_first /= np.linalg.norm(state_embedding_first)
+            embeddings_episode_buffer.append(state_embedding_first)
             label_buffer.append(int(file.split('_')[0])) # video sequence label
             #label_buffer.append(poses[i-1]) # video sequence label
             #label_buffer.append(np.concatenate([delta_euler,np.array(int(file.split('view')[1].split('.mp4')[0]))[None]])) 
             #label_buffer.append(i) # view label
         feature_buffer.append(np.array(embeddings_episode_buffer))
         j += 1
-        if j >= 20:
+        if j >= 50:
             break
     print('generate embedding')
     feature_buffer = np.squeeze(np.array(feature_buffer))
-    features = torch.Tensor(np.reshape(np.array(feature_buffer), [feature_buffer.shape[0]*feature_buffer.shape[1], feature_buffer.shape[2]]))
+    #feature_buffer = np.array(feature_buffer)
+    #features = torch.Tensor(np.reshape(np.array(feature_buffer), [feature_buffer.shape[0]*feature_buffer.shape[1], feature_buffer.shape[2]]))
+    features = feature_buffer
     label = torch.Tensor(np.asarray(label_buffer))
     images = torch.Tensor(np.transpose(np.asarray(image_buffer)/255.0, [0, 3, 1, 2]))
     writer.add_embedding(features, metadata=label, label_img=images)

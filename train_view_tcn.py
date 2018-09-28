@@ -18,7 +18,7 @@ from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.autograd import gradcheck
 from torch.utils.data import DataLoader, ConcatDataset
-from utils.builders import TwoViewBuilder, TwoViewQuaternionBuilder
+from utils.builders import TwoViewBuilder, TwoViewQuaternionBuilder, OneViewQuaternionBuilder
 from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped
 from utils.vocabulary import Vocabulary
 from view_tcn import define_model
@@ -37,8 +37,8 @@ from utils.rot_utils import create_rot_from_vector, rotationMatrixToEulerAngles,
                             isRotationMatrix, eulerAnglesToRotationMatrix, \
                             norm_sincos, sincos2rotm
 from utils.network_utils import loss_rotation, loss_euler_reparametrize, loss_axisangle, batch_size, apply,\
-                                    loss_quat
-##### PATHS #####
+                                    loss_quat, loss_quat_single
+
 sys.path.append('/home/max/projects/gps-lfd') 
 sys.path.append('/home/msieb/projects/gps-lfd')
 from config_server import Config_Isaac_Server as Config # Import approriate config
@@ -57,30 +57,30 @@ EXP_NAME = conf.EXP_NAME
 EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 USE_CUDA = conf.USE_CUDA
-NUM_VIEWS = 5
-SAMPLE_SIZE = 5
-VAL_SEQS = 2
-TRAIN_SEQS_PER_EPOCH = 5
+NUM_VIEWS = 100
+SAMPLE_SIZE = 200
+VAL_SEQS = 1
+TRAIN_SEQS_PER_EPOCH = 1
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
 
-builder = TwoViewQuaternionBuilder
-loss_fn = loss_quat
+builder = OneViewQuaternionBuilder
+loss_fn = loss_quat_single
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--start-epoch', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--save-every', type=int, default=100)
+    parser.add_argument('--save-every', type=int, default=20)
     parser.add_argument('--model-folder', type=str, default=join(EXP_DIR, EXP_NAME,'trained_models', MODEL_FOLDER, time_stamped()))
     parser.add_argument('--load-model', type=str, required=False)
     # parser.add_argument('--train-directory', type=str, default='./data/multiview-pouring/train/')
     # parser.add_argument('--validation-directory', type=str, default='./data/multiview-pouring/val/')
     parser.add_argument('--train-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/train/'))
     parser.add_argument('--validation-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/valid/'))
-    parser.add_argument('--minibatch-size', type=int, default=4)
+    parser.add_argument('--minibatch-size', type=int, default=8)
     parser.add_argument('--margin', type=float, default=2.0)
     parser.add_argument('--model-name', type=str, default='tcn')
     parser.add_argument('--log-file', type=str, default='./out.log')

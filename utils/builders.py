@@ -39,7 +39,7 @@ ROT_MATRICES = cam_conf.ROT_MATRICES
 #sys.path.append('/home/msieb/projects/Mask_RCNN/samples')
 #from baxter.baxter import BaxterConfig, InferenceConfig
 
-OFFSET = 1
+OFFSET = 0
 
 class SingleViewTripletBuilder(object):
     def __init__(self, view, video_directory, image_size, cli_args, sample_size=500):
@@ -223,6 +223,9 @@ class MultiViewTripletBuilder(object):
         return TensorDataset(triplets, torch.zeros(triplets.size()[0]))
 
     def sample_anchor_frame_index(self):
+        # if self.frame_lengths[self.sequence_index * self.n_views] == 1:
+        #     return 0
+        # else:
         arange = np.arange(0, self.frame_lengths[self.sequence_index * self.n_views])
         return np.random.choice(arange)
 
@@ -419,6 +422,43 @@ class TwoViewQuaternionBuilder(TwoViewBuilder):
         # Second argument is labels. Not used.
         return TensorDataset(frames, deltas_quat)
 
+class OneViewQuaternionBuilder(TwoViewQuaternionBuilder):
+    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500, n_seqs=10000):
+        super(OneViewQuaternionBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size, n_seqs)
+    
+    def sample_triplet(self, snaps, rot):
+        anchor_frames = np.zeros((1, 3, 299, 299))
+        anchor_index = self.sample_anchor_frame_index()
+        positive_index = anchor_index
+        # negative_index = self.sample_negative_frame_index(anchor_index)
+        # random sample anchor view,and positive view
+        view_set = set(range(self.n_views))
+        anchor_view = np.random.choice(np.array(list(view_set)))
+        #negative_view = anchor_view # negative example comes from same view INQUIRE TODO
+        anchor_frames[0] = snaps[anchor_view][anchor_index]
+        #negative_frame = snaps[negative_view][negative_index]
+        # what shape has pose? T x 7?
+        rot = rot[anchor_view].T
+        quat = Quaternion(matrix=rot)
+        quat = quat.elements
+        quat /= np.linalg.norm(quat)
+        #delta_euler = rotationMatrixToEulerAngles(delta_rot)
+        #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
+        assert isRotationMatrix(rot)
+        return (torch.Tensor(anchor_frames), torch.Tensor(quat))
+
+    def build_set(self):
+        frames = torch.Tensor(self.sample_size, 1, 3, *self.frame_size)
+        quats = torch.Tensor(self.sample_size, 4)
+        snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
+        #print("building set from video sequence, loaded paths: {}".format(debug_paths))
+        for i in range(0, self.sample_size):
+            anchor_frame, quat = self.sample_triplet(snaps, self.rots)
+            frames[i, 0, :, :, :] = anchor_frame[0]
+            quats[i] = quat
+        self.sequence_index = (self.sequence_index + 1) % self.sequence_count
+        # Second argument is labels. Not used.
+        return TensorDataset(frames, quats) 
 
 class TwoViewEulerBuilder(TwoViewBuilder):
     def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500):

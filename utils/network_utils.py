@@ -36,14 +36,31 @@ def loss_quat(tcn, minibatch, lambd=0.01):
   features_second_view_gt, a_pred, features_first_view_gt = tcn(anchor_frames)
   assert a_pred.shape[-1] == 4
   dist = geodesic_dist_quat(anchor_quats, a_pred)
-  print("Correctly classified rotations: {}".format(np.sum(dist < 0.2)))
+  #print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
   #print("distances of batch: ", dist.data.cpu().numpy())
   loss = dist.mean() + \
         lambd * torch.nn.SmoothL1Loss()(features_first_view_gt, features_second_view_gt.detach())
   return loss
 
+def loss_quat_single(tcn, minibatch, lambd=0.01):
+  """ 
+  Calculates reparamerized euler angles as network output and puts
+  loss on rotation matrix calculated from those, after normalizing the sin/cos values
+  Assumes 6 dimensional rotation parameters -> sin/cos per angle,
+  over all 6 values
+  """
+  if USE_CUDA:
+     anchor_frames = minibatch[0].cuda()
+     anchor_quats = minibatch[1].cuda() # load as 3x3 rotation matrix
+  _, a_pred, features_first_view_gt = tcn(anchor_frames)
+  assert a_pred.shape[-1] == 4
+  dist = geodesic_dist_quat(anchor_quats, a_pred)
+  print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
+  #print("distances of batch: ", dist.data.cpu().numpy())
+  loss = dist.mean() 
+  return loss
 
-def loss_rotation(tcn, minibatch, lambd=0.1):
+def loss_rotation(tcn, minibatch, lambd=0.01):
   """ 
   Calculates reparametrized euler angles as network output and puts
   loss on rotation matrix calculated from those, after normalizing the sin/cos values
@@ -58,6 +75,8 @@ def loss_rotation(tcn, minibatch, lambd=0.1):
   assert a_pred.shape[-1] == 6
   rots_pred = apply(sincos2rotm, a_pred)
   dist = geodesic_dist(anchor_rots, rots_pred)
+  print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
+
   #print("distances of batch: ", dist.data.cpu().numpy())
   loss = dist.mean() + \
         lambd * torch.nn.SmoothL1Loss()(features_first_view_gt, features_second_view_gt.detach())
@@ -120,6 +139,6 @@ def batch_size(epoch, max_size):
     return min(max(2 ** (exponent), 2), max_size)
 
 def apply(func, M):
-        tList = [func(m) for m in torch.unbind(M, dim=0) ]
-        res = torch.stack(tList, dim=0)
-        return res 
+    tList = [func(m) for m in torch.unbind(M, dim=0) ]
+    res = torch.stack(tList, dim=0)
+    return res 

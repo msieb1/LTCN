@@ -103,6 +103,7 @@ class TCNModel(EmbeddingNet):
         self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
         self.SpatialSoftmax = nn.Softmax2d()
         self.FullyConnected7a = Dense(31 * 31 * 20, self.state_dim)
+        self.FullyConnectedSingle = Dense(self.state_dim, 128)
         self.FullyConnectedConcat = Dense(2*self.state_dim, 128)
         self.FullyConnectedPose1 = Dense(128, 512)
         self.FullyConnectedPose2 = Dense(512, 128)
@@ -177,7 +178,7 @@ class TCNModel(EmbeddingNet):
        
         return second_view_gt, a_pred, first_view_gt
 
-    def forward(self, x):
+    def forward_quaternion_delta(self, x):
         # Predicts cos/sin values (tanh'ed)
         if self.transform_input:
             x = x.clone()
@@ -236,6 +237,63 @@ class TCNModel(EmbeddingNet):
         # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
        
         return second_view_gt, a_pred, first_view_gt
+
+    def forward(self, x):
+        # Predicts cos/sin values (tanh'ed)
+        if self.transform_input:
+            x = x.clone()
+            x[:, :, 0] = x[:, :, 0] * (0.229 / 0.5) + (0.485 - 0.5) / 0.5
+            x[:, :, 1] = x[:, :, 1] * (0.224 / 0.5) + (0.456 - 0.5) / 0.5
+            x[:, :, 2] = x[:, :, 2] * (0.225 / 0.5) + (0.406 - 0.5) / 0.5
+        # 299 x 299 x 3
+        batch_size = x.size()[0]
+        frames_per_batch = x.size()[1] # should be one because absolute pose prediction
+
+        x = torch.squeeze(x, dim=1)
+        x = self.Conv2d_1a_3x3(x)
+        # 149 x 149 x 32
+        x = self.Conv2d_2a_3x3(x)
+        # 147 x 147 x 32
+        x = self.Conv2d_2b_3x3(x)
+        # 147 x 147 x 64
+        x = F.max_pool2d(x, kernel_size=3, stride=2)
+        # 73 x 73 x 64
+        x = self.Conv2d_3b_1x1(x)
+        # 73 x 73 x 80
+        x = self.Conv2d_4a_3x3(x)
+        # 71 x 71 x 192
+        x = F.max_pool2d(x, kernel_size=3, stride=2)
+        # 35 x 35 x 192
+        x = self.Mixed_5b(x)
+        # 35 x 35 x 256
+        x = self.Mixed_5c(x)
+        # 35 x 35 x 288
+        y = self.Mixed_5d(x)
+        # 33 x 33 x 100
+        x = self.Conv2d_6a_3x3(y)
+        # 31 x 31 x 20
+        x = self.Conv2d_6b_3x3(x)
+        # 31 x 31 x 20
+        #x = self.SpatialSoftmax(x)
+        # 32
+        x = self.FullyConnected7a(x.view(x.size()[0], -1))
+        # Reshape to separate inputs
+
+        # Split input frames, x1 is first view, x2 is second view
+        x1 = x
+        xout = x
+        #Build inverse model
+        # Concatenate resulting features to 64d-vector
+        x1 = self.FullyConnectedSingle(x1)
+        x1 = self.FullyConnectedPose1(x1)
+        x1 = self.FullyConnectedPose2(x1)
+        a_pred = self.FullyConnectedPose3(x1)
+        a_pred = self.normalize(a_pred)
+        
+        first_view_gt = xout
+        # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
+       
+        return None , a_pred, first_view_gt
 
     def forward_axisangle(self, x):
         if self.transform_input:
