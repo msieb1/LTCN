@@ -40,7 +40,6 @@ MODE = conf.MODE
 MODEL_FOLDER = conf.MODEL_FOLDER
 MODEL_NAME = conf.MODEL_NAME
 MODEL_PATH = join(EXP_DIR, EXP_NAME, 'trained_models',MODEL_FOLDER, MODEL_NAME)
-print("Model path: ", MODEL_PATH)
 RGB_PATH = join(EXP_DIR, EXP_NAME, 'videos', MODE)
 print("Video path: ", RGB_PATH)
 DEPTH_PATH = join(EXP_DIR, EXP_NAME, 'depth', MODE)
@@ -99,6 +98,7 @@ def load_tcn_weights(model_path):
 
 def main(args):
     # output_folder = join(OUTPUT_PATH, args.experiment_relative_path)
+    print("Model path: ", args.model_path)
     output_folder = OUTPUT_PATH
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)     
@@ -199,5 +199,6 @@ def get_delta_euler(file):
 
 
 if  __name__ == '__main__':
+ 
     args = parser.parse_args()
     main(args)

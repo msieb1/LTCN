@@ -21,7 +21,6 @@ from torch.utils.data import DataLoader, ConcatDataset
 from utils.builders import TwoViewBuilder, TwoViewQuaternionBuilder, OneViewQuaternionBuilder
 from utils.builder_utils import distance, Logger, ensure_folder, collate_fn, time_stamped
 from utils.vocabulary import Vocabulary
-from view_tcn import define_model
 from ipdb import set_trace
 from sklearn.preprocessing import OneHotEncoder
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
@@ -32,6 +31,7 @@ from torchvision import datasets
 from tensorboardX import SummaryWriter
 import matplotlib.pyplot as plt
 
+from view_tcn import define_model
 from utils.plot_utils import plot_mean
 from utils.rot_utils import create_rot_from_vector, rotationMatrixToEulerAngles, \
                             isRotationMatrix, eulerAnglesToRotationMatrix, \
@@ -58,7 +58,7 @@ EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 USE_CUDA = conf.USE_CUDA
 NUM_VIEWS = 100
-SAMPLE_SIZE = 200
+SAMPLE_SIZE = 500
 VAL_SEQS = 1
 TRAIN_SEQS_PER_EPOCH = 1
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
@@ -228,7 +228,7 @@ def main():
             val_losses_.append(loss)
 
         if epoch % args.save_every == 0 and epoch != 0:
-            logger.info('Saving model to {}'.format(args.model_folder)) 
+            logger.info('Saving model to {}'.format(join(args.model_folder, model_filename(args.model_name, epoch)))) 
             save_model(tcn, model_filename(args.model_name, epoch), args.model_folder)
         plot_mean(trn_losses_, args.model_folder, 'train_loss')
         plot_mean(val_losses_, args.model_folder, 'validation_loss')

@@ -55,7 +55,7 @@ def loss_quat_single(tcn, minibatch, lambd=0.01):
   _, a_pred, features_first_view_gt = tcn(anchor_frames)
   assert a_pred.shape[-1] == 4
   dist = geodesic_dist_quat(anchor_quats, a_pred)
-  print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
+  #print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
   #print("distances of batch: ", dist.data.cpu().numpy())
   loss = dist.mean() 
   return loss

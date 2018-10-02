@@ -103,11 +103,11 @@ class TCNModel(EmbeddingNet):
         self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
         self.SpatialSoftmax = nn.Softmax2d()
         self.FullyConnected7a = Dense(31 * 31 * 20, self.state_dim)
-        self.FullyConnectedSingle = Dense(self.state_dim, 128)
+        self.FullyConnectedSingle = Dense(self.state_dim, 256)
         self.FullyConnectedConcat = Dense(2*self.state_dim, 128)
-        self.FullyConnectedPose1 = Dense(128, 512)
-        self.FullyConnectedPose2 = Dense(512, 128)
-        self.FullyConnectedPose3 = Dense(128, self.action_dim)
+        self.FullyConnectedPose1 = Dense(256, 512)
+        self.FullyConnectedPose2 = Dense(512, 256)
+        self.FullyConnectedPose3 = Dense(256, self.action_dim)
         self.tanh = torch.nn.Tanh()
         self.hardtanh = torch.nn.Hardtanh(min_val=0, max_val=math.pi)
 
@@ -285,8 +285,8 @@ class TCNModel(EmbeddingNet):
         #Build inverse model
         # Concatenate resulting features to 64d-vector
         x1 = self.FullyConnectedSingle(x1)
-        x1 = self.FullyConnectedPose1(x1)
-        x1 = self.FullyConnectedPose2(x1)
+        #x1 = self.FullyConnectedPose1(x1)
+        #x1 = self.FullyConnectedPose2(x1)
         a_pred = self.FullyConnectedPose3(x1)
         a_pred = self.normalize(a_pred)
         
