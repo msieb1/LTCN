@@ -50,7 +50,7 @@ class PosNet(EmbeddingNet):
         self.Conv2d_1a = nn.Conv2d(3, 64, bias=False, kernel_size=10, stride=2)
         self.Conv2d_2a = BatchNormConv2d(64, 32, bias=False, kernel_size=3, stride=1)
         self.Conv2d_3a = BatchNormConv2d(32, 32, bias=False, kernel_size=3, stride=1)
-        self.Conv2d_4a = BatchNormConv2d(32, 32, bias=False, kernel_size=2, stride=1)
+        self.Conv7d_4a = BatchNormConv2d(32, 32, bias=False, kernel_size=2, stride=1)
 
         self.Dense1 = Dense(6 * 6 * 32, 32)
         self.alpha = 10
@@ -103,11 +103,11 @@ class TCNModel(EmbeddingNet):
         self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
         self.SpatialSoftmax = nn.Softmax2d()
         self.FullyConnected7a = Dense(31 * 31 * 20, self.state_dim)
-        self.FullyConnectedSingle = Dense(self.state_dim, 256)
+        self.FullyConnectedSingle = Dense(self.state_dim, 128)
         self.FullyConnectedConcat = Dense(2*self.state_dim, 128)
-        self.FullyConnectedPose1 = Dense(256, 512)
-        self.FullyConnectedPose2 = Dense(512, 256)
-        self.FullyConnectedPose3 = Dense(256, self.action_dim)
+        self.FullyConnectedPose1 = Dense(128, 256)
+        self.FullyConnectedPose2 = Dense(256, 128)
+        self.FullyConnectedPose3 = Dense(128, self.action_dim)
         self.tanh = torch.nn.Tanh()
         self.hardtanh = torch.nn.Hardtanh(min_val=0, max_val=math.pi)
 
@@ -214,7 +214,7 @@ class TCNModel(EmbeddingNet):
         # 31 x 31 x 20
         x = self.Conv2d_6b_3x3(x)
         # 31 x 31 x 20
-        #x = self.SpatialSoftmax(x)
+        x = self.SpatialSoftmax(x)
         # 32
         x = self.FullyConnected7a(x.view(x.size()[0], -1))
         # Reshape to separate inputs
@@ -226,10 +226,10 @@ class TCNModel(EmbeddingNet):
         # Build inverse model
         # Concatenate resulting features to 64d-vector
         x_cat = torch.cat((x1, x2), 1)     
-        x_cat = self.FullyConnectedConcat(x_cat)
-        a_inv = self.FullyConnectedPose1(x_cat)
-        a_inv = self.FullyConnectedPose2(a_inv)
-        a_pred = self.FullyConnectedPose3(a_inv)
+        a_pred = self.FullyConnectedConcat(x_cat)
+        #a_inv = self.FullyConnectedPose1(x_cat)
+        #a_inv = self.FullyConnectedPose2(a_inv)
+        a_pred = self.FullyConnectedPose3(a_pred)
         a_pred = self.normalize(a_pred)
         
         second_view_gt = x2
@@ -237,8 +237,8 @@ class TCNModel(EmbeddingNet):
         # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
        
         return second_view_gt, a_pred, first_view_gt
-
-    def forward(self, x):
+    
+    def forward_quat_single(self, x):
         # Predicts cos/sin values (tanh'ed)
         if self.transform_input:
             x = x.clone()
@@ -419,6 +419,10 @@ class TCNModel(EmbeddingNet):
         # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
        
         return second_view_gt, self.normalize(a_pred), first_view_gt
+    
+    
+    
+    forward = forward_quaternion_delta
 
 def define_model(pretrained=True, action_dim=6):
     return TCNModel(models.inception_v3(pretrained=pretrained), action_dim)

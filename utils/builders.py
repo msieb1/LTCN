@@ -390,11 +390,16 @@ class TwoViewQuaternionBuilder(TwoViewBuilder):
         positive_index = anchor_index
         # negative_index = self.sample_negative_frame_index(anchor_index)
         # random sample anchor view,and positive view
-        view_set = set(range(self.n_views))
-        anchor_view = np.random.choice(np.array(list(view_set)))
-        view_set.remove(anchor_view)
-        positive_view = np.random.choice(np.array(list(view_set)))
-        #negative_view = anchor_view # negative example comes from same view INQUIRE TODO
+        # Remove anchor view
+        # view_set = set(range(self.n_views))
+        # anchor_view = np.random.choice(np.array(list(view_set)))
+        # view_set.remove(anchor_view)
+        # positive_view = np.random.choice(np.array(list(view_set)))
+
+        # Dont remove anchor view
+        view_set = range(self.n_views)
+        anchor_view = np.random.choice(np.array(view_set))
+        positive_view = np.random.choice(np.array(view_set))
         anchor_frames[0] = snaps[anchor_view][anchor_index]
         anchor_frames[1] = snaps[positive_view][positive_index]
         #negative_frame = snaps[negative_view][negative_index]

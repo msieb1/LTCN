@@ -20,6 +20,9 @@ from utils.builder_utils import time_stamped
 sys.path.append('../general-utils')
 from rot_utils import rotationMatrixToEulerAngles
 
+sys.path.append('../gps-lfd/python')
+from gps.agent.bullet.bullet_utils import get_view_embedding, get_two_view_embedding
+
 sys.path.append('/home/max/projects/gps-lfd')
 sys.path.append('/home/msieb/projects/gps-lfd')
 #from config import Config as Config # Import approriate config
@@ -103,10 +106,10 @@ def main(args):
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)     
     
-    tcn = load_tcn_model(MODEL_PATH, use_cuda=USE_CUDA)
+    tcn = load_tcn_model(args.model_path, use_cuda=USE_CUDA)
     # input_folder = join(INPUT_PATH, args.experiment_relative_path)
 
-    logdir = os.path.join('runs', MODEL_FOLDER, 'embeddings_viz', time_stamped()) 
+    logdir = os.path.join('runs', '/'.join(str.split(args.model_path, '/')[:-1]), 'embeddings_viz', time_stamped()) 
     print("logging to {}".format(logdir)) 
     writer = SummaryWriter(logdir)
     image_buffer = []
@@ -153,14 +156,11 @@ def main(args):
             resized_depth_before = resize_frame(im_depth_before, IMAGE_SIZE)[None, :]
             # resized_depth = resize_frame(depth_rescaled[:, :, None], IMAGE_SIZE)[None, :]
             #frames = np.concatenate(resized_image, axis=0)
-            frames = resized_image
-            if USE_CUDA:
-              state_embedding_second, a_pred, state_embedding_first  = tcn(torch.Tensor(frames[None]).cuda())
-            else:
-              state_embedding_second, a_pred, state_embedding_first = tcn(torch.Tensor(frames[None]))         
-            state_embedding_first = state_embedding_first.detach().cpu().numpy()
-            state_embedding_first /= np.linalg.norm(state_embedding_first)
-            embeddings_episode_buffer.append(state_embedding_first)
+            #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
+            emb_unnormalized, a_pred = get_two_view_embedding(tcn, resized_image_before, resized_image, use_cuda=USE_CUDA)
+
+            embedding = emb_unnormalized/ np.linalg.norm(emb_unnormalized)
+            embeddings_episode_buffer.append(embedding)
             label_buffer.append(int(file.split('_')[0])) # video sequence label
             #label_buffer.append(poses[i-1]) # video sequence label
             #label_buffer.append(np.concatenate([delta_euler,np.array(int(file.split('view')[1].split('.mp4')[0]))[None]])) 
@@ -179,24 +179,9 @@ def main(args):
     writer.add_embedding(features, metadata=label, label_img=images)
     
     print("=" * 10)
-    
+
     print('Exit function')
-
-
-def get_delta_euler(file):
-    # pose is (T, 4)
-    pose = np.load(join(RGB_PATH, file.split('.mp4')[0].split('_')[0] +'_ee.npy'))[:, -4:]    
-    pose = pose[:,-4:]
-    delta_euler = np.zeros((len(pose), 3))
-    for i in range(len(pose) - 1 - skipped_frames):
-        pose[:, [0,3]] = pose[:, [3, 0]]
-        q1 = Quaternion(pose[i])
-        q2 = Quaternion(pose[i + 1 + skipped_frames])
-        delta_q = q2*q1.inverse
-        delta_euler[i] = rotationMatrixToEulerAngles(delta_q.rotation_matrix)
-    return delta_euler
-
-
+    print("logged to {}".format(logdir)) 
 
 if  __name__ == '__main__':
  

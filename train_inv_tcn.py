@@ -74,7 +74,7 @@ def get_args():
 
     parser.add_argument('--validation-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/valid/'))
 
-    parser.add_argument('--minibatch-size', type=int, default=16)
+    parser.add_argument('--minibatch-size', type=int, default=32)
     parser.add_argument('--margin', type=float, default=2.0)
     parser.add_argument('--model-name', type=str, default='tcn')
     parser.add_argument('--log-file', type=str, default='./out.log')

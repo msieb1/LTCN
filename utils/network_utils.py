@@ -38,8 +38,8 @@ def loss_quat(tcn, minibatch, lambd=0.01):
   dist = geodesic_dist_quat(anchor_quats, a_pred)
   #print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
   #print("distances of batch: ", dist.data.cpu().numpy())
-  loss = dist.mean() + \
-        lambd * torch.nn.SmoothL1Loss()(features_first_view_gt, features_second_view_gt.detach())
+  loss = dist.mean() #+ \
+   #     lambd * torch.nn.SmoothL1Loss()(features_first_view_gt, features_second_view_gt.detach())
   return loss
 
 def loss_quat_single(tcn, minibatch, lambd=0.01):

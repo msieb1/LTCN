@@ -57,16 +57,16 @@ EXP_NAME = conf.EXP_NAME
 EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 USE_CUDA = conf.USE_CUDA
-NUM_VIEWS = 100
-SAMPLE_SIZE = 500
-VAL_SEQS = 1
-TRAIN_SEQS_PER_EPOCH = 1
+NUM_VIEWS = 100 
+SAMPLE_SIZE = 5000 
+VAL_SEQS = 2
+TRAIN_SEQS_PER_EPOCH = 1 
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
 
-builder = OneViewQuaternionBuilder
-loss_fn = loss_quat_single
+builder = TwoViewQuaternionBuilder
+loss_fn = loss_quat
 
 
 def get_args():
@@ -80,7 +80,7 @@ def get_args():
     # parser.add_argument('--validation-directory', type=str, default='./data/multiview-pouring/val/')
     parser.add_argument('--train-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/train/'))
     parser.add_argument('--validation-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/valid/'))
-    parser.add_argument('--minibatch-size', type=int, default=8)
+    parser.add_argument('--minibatch-size', type=int, default=32)
     parser.add_argument('--margin', type=float, default=2.0)
     parser.add_argument('--model-name', type=str, default='tcn')
     parser.add_argument('--log-file', type=str, default='./out.log')
