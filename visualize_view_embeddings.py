@@ -40,6 +40,7 @@ os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1, 2, 4"
 EXP_DIR = conf.EXP_DIR
 EXP_NAME = conf.EXP_NAME
 MODE = conf.MODE
+#MODE = 'valid'
 MODEL_FOLDER = conf.MODEL_FOLDER
 MODEL_NAME = conf.MODEL_NAME
 MODEL_PATH = join(EXP_DIR, EXP_NAME, 'trained_models',MODEL_FOLDER, MODEL_NAME)
@@ -117,7 +118,7 @@ def main(args):
     feature_buffer = []
     j = 0
     files = [ p for p in os.listdir(RGB_PATH) if p.endswith('.mp4') ]
-    files = sorted(files)
+    #files = sorted(files)
     for file in files:
         if SELECTED_SEQS is not None and file.split('_')[0] not in SELECTED_SEQS:    
             continue
@@ -157,8 +158,8 @@ def main(args):
             # resized_depth = resize_frame(depth_rescaled[:, :, None], IMAGE_SIZE)[None, :]
             #frames = np.concatenate(resized_image, axis=0)
             #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
-            emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image_before, resized_image, use_cuda=USE_CUDA)
-            #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
+            #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image_before, resized_image, use_cuda=USE_CUDA)
+            emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
             embedding = emb_unnormalized/ np.linalg.norm(emb_unnormalized)
             embeddings_episode_buffer.append(embedding)
             label_buffer.append(int(file.split('_')[0])) # video sequence label
@@ -167,7 +168,7 @@ def main(args):
             #label_buffer.append(i) # view label
         feature_buffer.append(np.array(embeddings_episode_buffer))
         j += 1
-        if j >= 50:
+        if j >= 30:
             break
     print('generate embedding')
     feature_buffer = np.squeeze(np.array(feature_buffer))

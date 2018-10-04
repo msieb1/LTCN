@@ -339,10 +339,13 @@ class TwoViewBuilder(MultiViewTripletBuilder):
         self.sequence_count = int(len(self.video_paths) / self.n_views)
 
     @functools.lru_cache(maxsize=1)
+    #def get_rot(self):
+    #    views = []
+    #    for i in range(self.n_views):
+    #        views.append(ROT_MATRICES[i])
+    #    return views
     def get_rot(self):
-        views = []
-        for i in range(self.n_views):
-            views.append(ROT_MATRICES[i])
+        views = np.load(os.path.join(self._video_directory, "{}_camparams.npy".format(self.sequence_index)))
         return views
     
     def sample_triplet(self, snaps, rot):

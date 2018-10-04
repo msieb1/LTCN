@@ -57,7 +57,7 @@ EXP_NAME = conf.EXP_NAME
 EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 USE_CUDA = conf.USE_CUDA
-NUM_VIEWS = 50 
+NUM_VIEWS = 100 
 SAMPLE_SIZE = 1000 
 VAL_SEQS = 1
 TRAIN_SEQS_PER_EPOCH = 1 
@@ -66,10 +66,10 @@ print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
 
 
-#builder = OneViewQuaternionBuilder
-#loss_fn = loss_quat_single
-builder = TwoViewQuaternionBuilder
-loss_fn = loss_quat
+builder = OneViewQuaternionBuilder
+loss_fn = loss_quat_single
+#builder = TwoViewQuaternionBuilder
+#loss_fn = loss_quat
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -125,8 +125,6 @@ def validate(tcn, use_cuda, n_calls):
     n_calls += 1
     loss = np.mean(losses)
     logger.info('val loss: ',loss)
-    if loss == 0:
-        set_trace()
     return loss, n_calls
 
 def model_filename(model_name, epoch):
@@ -212,8 +210,6 @@ def main():
             for minibatch in data_loader:
                 # frames = Variable(minibatch, require_grad=False)
                 loss = loss_fn(tcn, minibatch)
-                if loss == 0:
-                    set_trace()
                 losses.append(loss.data.cpu().numpy()) 
                 # print(gradcheck(loss_fn, (tcn, minibatch,)))     
                 optimizer.zero_grad()

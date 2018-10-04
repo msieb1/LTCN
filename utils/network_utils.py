@@ -19,7 +19,7 @@ def geodesic_dist(R1, R2):
     return dist
 
 def geodesic_dist_quat(q1, q2):
-    dist = 2*torch.acos(torch.abs(torch.sum(q1*q2, dim=1)).clamp(-1.0+1e-10, 1.0-1e-10))
+    dist = 2*torch.acos(torch.abs(torch.sum(q1*q2, dim=1)).clamp(-1.0+1e-7, 1.0-1e-7))
     return dist
 
 
@@ -60,8 +60,10 @@ def loss_quat_single(tcn, minibatch, lambd=0.01):
 #3if np.isnan(dist.data.cpu().numpy()):
  #     set_trace()
   loss = dist.mean()
-  if np.isnan(loss.data.cpu().numpy()):
+  if loss == 0:
       set_trace()
+  if np.isnan(loss.data.cpu().numpy()):
+    print('exploded gradients')
   return loss
 
 def loss_rotation(tcn, minibatch, lambd=0.01):

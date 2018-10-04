@@ -423,8 +423,8 @@ class TCNModel(EmbeddingNet):
     
     
     
-    #forward = forward_quat_single
-    forward = forward_quaternion_delta
+    forward = forward_quat_single
+    #forward = forward_quaternion_delta
 
 def define_model(pretrained=True, action_dim=6):
     return TCNModel(models.inception_v3(pretrained=pretrained), action_dim)
