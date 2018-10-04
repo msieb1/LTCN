@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 
 from view_tcn import define_model
 from utils.plot_utils import plot_mean
-from utils.rot_utils import create_rot_from_vector, rotationMatrixToEulerAngles, \
+from utils.rot_utils_old import create_rot_from_vector, rotationMatrixToEulerAngles, \
                             isRotationMatrix, eulerAnglesToRotationMatrix, \
                             norm_sincos, sincos2rotm
 from utils.network_utils import loss_rotation, loss_euler_reparametrize, loss_axisangle, batch_size, apply,\
@@ -57,17 +57,19 @@ EXP_NAME = conf.EXP_NAME
 EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 USE_CUDA = conf.USE_CUDA
-NUM_VIEWS = 100 
-SAMPLE_SIZE = 5000 
-VAL_SEQS = 2
+NUM_VIEWS = 50 
+SAMPLE_SIZE = 1000 
+VAL_SEQS = 1
 TRAIN_SEQS_PER_EPOCH = 1 
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
 
+
+#builder = OneViewQuaternionBuilder
+#loss_fn = loss_quat_single
 builder = TwoViewQuaternionBuilder
 loss_fn = loss_quat
-
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -80,7 +82,7 @@ def get_args():
     # parser.add_argument('--validation-directory', type=str, default='./data/multiview-pouring/val/')
     parser.add_argument('--train-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/train/'))
     parser.add_argument('--validation-directory', type=str, default=join(EXP_DIR, EXP_NAME, 'videos/valid/'))
-    parser.add_argument('--minibatch-size', type=int, default=32)
+    parser.add_argument('--minibatch-size', type=int, default=8)
     parser.add_argument('--margin', type=float, default=2.0)
     parser.add_argument('--model-name', type=str, default='tcn')
     parser.add_argument('--log-file', type=str, default='./out.log')
@@ -99,7 +101,7 @@ print(args)
 
 logger = Logger(args.log_file)
 
-validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=int(SAMPLE_SIZE/2.0), n_seqs=VAL_SEQS)
+validation_builder = builder(args.n_views, args.validation_directory, IMAGE_SIZE, args, sample_size=int(SAMPLE_SIZE/5.0), n_seqs=VAL_SEQS)
 validation_set = [validation_builder.build_set() for i in range(VAL_SEQS)]
 validation_set = ConcatDataset(validation_set)
 del validation_builder
@@ -123,7 +125,8 @@ def validate(tcn, use_cuda, n_calls):
     n_calls += 1
     loss = np.mean(losses)
     logger.info('val loss: ',loss)
-
+    if loss == 0:
+        set_trace()
     return loss, n_calls
 
 def model_filename(model_name, epoch):
@@ -209,7 +212,8 @@ def main():
             for minibatch in data_loader:
                 # frames = Variable(minibatch, require_grad=False)
                 loss = loss_fn(tcn, minibatch)
-                
+                if loss == 0:
+                    set_trace()
                 losses.append(loss.data.cpu().numpy()) 
                 # print(gradcheck(loss_fn, (tcn, minibatch,)))     
                 optimizer.zero_grad()

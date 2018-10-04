@@ -22,6 +22,7 @@ from pyquaternion import Quaternion
 from builder_utils import distance, view_image, write_to_csv, ensure_folder, resize_frame, write_video, \
                 read_video, read_extracted_rcnn_results, read_caption, ls_directories, ls, ls_unparsed_txt, ls_npy, \
                 ls_txt, ls_view, read_extracted_video, Logger, ls_extracted, crop_box, crop_uniform_box, get_box_center
+sys.path.append('/home/msieb/projects/general-utils')
 from rot_utils import create_rot_from_vector, rotationMatrixToEulerAngles, isRotationMatrix, eulerAnglesToRotationMatrix
 from plot_utils import concat_frames_nosave
 
@@ -427,6 +428,55 @@ class TwoViewQuaternionBuilder(TwoViewBuilder):
         # Second argument is labels. Not used.
         return TensorDataset(frames, deltas_quat)
 
+class MultiViewQuaternionBuilder(TwoViewQuaternionBuilder):
+    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500, n_seqs=10000):
+        super(MultiViewQuaternionBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size, n_seqs)
+    
+    def sample_triplet(self, snaps, rot):
+        anchor_frames = np.zeros((3, 3, 299, 299))
+        anchor_index = self.sample_anchor_frame_index()
+        positive_index = anchor_index
+        # negative_index = self.sample_negative_frame_index(anchor_index)
+        # random sample anchor view,and positive view
+        #Remove anchor view
+        view_set = set(range(self.n_views))
+        anchor_view = np.random.choice(np.array(list(view_set)))
+        view_set.remove(anchor_view)
+        positive_view = np.random.choice(np.array(list(view_set)))
+
+        # Dont remove anchor view
+        # view_set = range(self.n_views)
+        # anchor_view = np.random.choice(np.array(view_set))
+        # positive_view = np.random.choice(np.array(view_set))
+        # anchor_frames[0] = snaps[anchor_view][anchor_index]
+        # anchor_frames[1] = snaps[positive_view][positive_index]
+
+        #negative_frame = snaps[negative_view][negative_index]
+        # what shape has pose? T x 7?
+        delta_rot = rot[positive_view].dot(rot[anchor_view].T)
+        delta_quat = Quaternion(matrix=delta_rot)
+        delta_quat = delta_quat.elements
+        delta_quat /= np.linalg.norm(delta_quat)
+        #delta_euler = rotationMatrixToEulerAngles(delta_rot)
+        #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
+        assert isRotationMatrix(delta_rot)
+        return (torch.Tensor(anchor_frames), torch.Tensor(delta_quat))
+
+    def build_set(self):
+        frames = torch.Tensor(self.sample_size, 2, 3, *self.frame_size)
+        deltas_quat = torch.Tensor(self.sample_size, 4)
+        snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
+        #print("building set from video sequence, loaded paths: {}".format(debug_paths))
+        for i in range(0, self.sample_size):
+            anchor_frame, delta_quat = self.sample_triplet(snaps, self.rots)
+            frames[i, 0, :, :, :] = anchor_frame[0]
+            frames[i, 1, :, :, :] = anchor_frame[1]
+            deltas_quat[i] = delta_quat
+        self.sequence_index = (self.sequence_index + 1) % self.sequence_count
+        # Second argument is labels. Not used.
+        return TensorDataset(frames, deltas_quat)
+
+
 class OneViewQuaternionBuilder(TwoViewQuaternionBuilder):
     def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500, n_seqs=10000):
         super(OneViewQuaternionBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size, n_seqs)
@@ -435,13 +485,13 @@ class OneViewQuaternionBuilder(TwoViewQuaternionBuilder):
         anchor_frames = np.zeros((1, 3, 299, 299))
         anchor_index = self.sample_anchor_frame_index()
         positive_index = anchor_index
-        # negative_index = self.sample_negative_frame_index(anchor_index)
+        
         # random sample anchor view,and positive view
         view_set = set(range(self.n_views))
         anchor_view = np.random.choice(np.array(list(view_set)))
-        #negative_view = anchor_view # negative example comes from same view INQUIRE TODO
         anchor_frames[0] = snaps[anchor_view][anchor_index]
-        #negative_frame = snaps[negative_view][negative_index]
+        
+
         # what shape has pose? T x 7?
         rot = rot[anchor_view].T
         quat = Quaternion(matrix=rot)

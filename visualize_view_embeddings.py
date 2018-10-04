@@ -21,7 +21,7 @@ sys.path.append('../general-utils')
 from rot_utils import rotationMatrixToEulerAngles
 
 sys.path.append('../gps-lfd/python')
-from gps.agent.bullet.bullet_utils import get_view_embedding, get_two_view_embedding
+from gps.agent.bullet.bullet_utils import get_view_embedding 
 
 sys.path.append('/home/max/projects/gps-lfd')
 sys.path.append('/home/msieb/projects/gps-lfd')
@@ -117,7 +117,7 @@ def main(args):
     feature_buffer = []
     j = 0
     files = [ p for p in os.listdir(RGB_PATH) if p.endswith('.mp4') ]
-    files = sorted(files, key=lambda f: int(f.split('_')[0]))
+    files = sorted(files)
     for file in files:
         if SELECTED_SEQS is not None and file.split('_')[0] not in SELECTED_SEQS:    
             continue
@@ -157,8 +157,8 @@ def main(args):
             # resized_depth = resize_frame(depth_rescaled[:, :, None], IMAGE_SIZE)[None, :]
             #frames = np.concatenate(resized_image, axis=0)
             #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
-            emb_unnormalized, a_pred = get_two_view_embedding(tcn, resized_image_before, resized_image, use_cuda=USE_CUDA)
-
+            emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image_before, resized_image, use_cuda=USE_CUDA)
+            #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
             embedding = emb_unnormalized/ np.linalg.norm(emb_unnormalized)
             embeddings_episode_buffer.append(embedding)
             label_buffer.append(int(file.split('_')[0])) # video sequence label

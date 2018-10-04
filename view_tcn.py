@@ -78,7 +78,7 @@ class PosNet(EmbeddingNet):
         return self.normalize(x) * self.alpha
         
 class TCNModel(EmbeddingNet):
-    def __init__(self, inception, action_dim=6):  
+    def __init__(self, inception, action_dim=6 ):  
         super(TCNModel, self).__init__()
         self.action_dim = action_dim
         self.state_dim = 32
@@ -161,8 +161,8 @@ class TCNModel(EmbeddingNet):
         xx = x.view(batch_size, frames_per_batch, -1)
 
         # Split input frames, x1 is first view, x2 is second view
-        x1 = xx[:, 0]
-        x2 = xx[:, 1]
+        x1 = self.normalize(xx[:, 0])
+        x2 = self.normalize(xx[:, 1])
         # Build inverse model
         # Concatenate resulting features to 64d-vector
         x_cat = torch.cat((x1, x2), 1)     
@@ -231,7 +231,6 @@ class TCNModel(EmbeddingNet):
         #a_inv = self.FullyConnectedPose2(a_inv)
         a_pred = self.FullyConnectedPose3(a_pred)
         a_pred = self.normalize(a_pred)
-        
         second_view_gt = x2
         first_view_gt = x1
         # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
@@ -281,6 +280,7 @@ class TCNModel(EmbeddingNet):
 
         # Split input frames, x1 is first view, x2 is second view
         x1 = x
+        x1 = self.normalize(x1)
         xout = x
         #Build inverse model
         # Concatenate resulting features to 64d-vector
@@ -293,7 +293,7 @@ class TCNModel(EmbeddingNet):
         first_view_gt = xout
         # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
        
-        return None , a_pred, first_view_gt
+        return self.normalize(xout), a_pred, first_view_gt
 
     def forward_axisangle(self, x):
         if self.transform_input:
@@ -422,6 +422,8 @@ class TCNModel(EmbeddingNet):
     
     
     
+    
+    #forward = forward_quat_single
     forward = forward_quaternion_delta
 
 def define_model(pretrained=True, action_dim=6):
