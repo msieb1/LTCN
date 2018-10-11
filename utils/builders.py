@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import Dataset, TensorDataset
 from torch import Tensor
 from torch.autograd import Variable
+import random
 import logging
 import nltk
 from vocabulary import Vocabulary
@@ -18,6 +19,7 @@ import matplotlib.pyplot as plt
 from scipy import ndimage as ndi
 import time
 from pyquaternion import Quaternion
+from torchvision.transforms import ColorJitter, RandomResizedCrop, Compose, ToTensor, ToPILImage
 
 from builder_utils import distance, view_image, write_to_csv, ensure_folder, resize_frame, write_video, \
                 read_video, read_extracted_rcnn_results, read_caption, ls_directories, ls, ls_unparsed_txt, ls_npy, \
@@ -41,24 +43,38 @@ ROT_MATRICES = cam_conf.ROT_MATRICES
 #from baxter.baxter import BaxterConfig, InferenceConfig
 
 OFFSET = 0
+tt = ToTensor()
+cj = ColorJitter(0.2, 0.1, 0,0)
+rc = RandomResizedCrop(size=299, scale=(0.8,1.0), ratio=(.8,1.2))
+tp = ToPILImage()
+
+content_transform = Compose([
+tp,
+rc,
+cj
+
+
+
+ ])
 
 class SingleViewTripletBuilder(object):
     def __init__(self, view, video_directory, image_size, cli_args, sample_size=500):
         self.frame_size = image_size
         self.view = view
         self._read_video_dir(video_directory)
+        #self._read_extracted_video_dir(video_directory)
         self._count_frames()
         # The negative example has to be from outside the buffer window. Taken from both sides of
         # ihe frame.
-        self.positive_frame_margin = 2
-        self.negative_frame_margin = 4
+        self.positive_frame_margin = 3
+        self.negative_frame_margin = 10 
         self.video_index = 0
         self.cli_args = cli_args
         self.sample_size = sample_size
 
     def _read_video_dir(self, video_directory):
         self._video_directory = video_directory
-        filenames = ls_extracted(video_directory)
+        filenames = ls(video_directory)
         self.video_paths = [os.path.join(self._video_directory, f) for f in filenames]
         self.video_count = len(self.video_paths)
 
@@ -230,7 +246,8 @@ class MultiViewTripletBuilder(object):
         arange = np.arange(0, self.frame_lengths[self.sequence_index * self.n_views])
         return np.random.choice(arange)
 
-    # def samplfe_positive_frame_index(self, anchor_index):
+    # def samplfe_positive_frame_index(self, anchor_inde4x):
+
     #     upper_bound = min(self.frame_lengths[self.sequence_index * self.n_views + 1] - 1, anchor_index)
     #     return upper_bound # in case video has less frames than anchor video
 
@@ -404,6 +421,12 @@ class TwoViewQuaternionBuilder(TwoViewBuilder):
         view_set = range(self.n_views)
         anchor_view = np.random.choice(np.array(view_set))
         positive_view = np.random.choice(np.array(view_set))
+        
+        #seed = random.randint(0,2**32)
+        #random.seed(seed)
+        #anchor_frames[0] = tt(cj(rc(tp((np.uint8(255*snaps[anchor_view][anchor_index]))))))
+        #random.seed(seed)
+        #anchor_frames[0] = tt(cj(rc(tp((np.uint8(255*snaps[anchor_view][anchor_index]))))))
         anchor_frames[0] = snaps[anchor_view][anchor_index]
         anchor_frames[1] = snaps[positive_view][positive_index]
         #negative_frame = snaps[negative_view][negative_index]
@@ -431,39 +454,39 @@ class TwoViewQuaternionBuilder(TwoViewBuilder):
         # Second argument is labels. Not used.
         return TensorDataset(frames, deltas_quat)
 
-class MultiViewQuaternionBuilder(TwoViewQuaternionBuilder):
-    def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500, n_seqs=10000):
-        super(MultiViewQuaternionBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size, n_seqs)
+# class MultiViewQuaternionBuilder(TwoViewQuaternionBuilder):
+#     def __init__(self, n_views, video_directory, image_size, cli_args, sample_size=500, n_seqs=10000):
+#         super(MultiViewQuaternionBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size, n_seqs)
     
-    def sample_triplet(self, snaps, rot):
-        anchor_frames = np.zeros((3, 3, 299, 299))
-        anchor_index = self.sample_anchor_frame_index()
-        positive_index = anchor_index
-        # negative_index = self.sample_negative_frame_index(anchor_index)
-        # random sample anchor view,and positive view
-        #Remove anchor view
-        view_set = set(range(self.n_views))
-        anchor_view = np.random.choice(np.array(list(view_set)))
-        view_set.remove(anchor_view)
-        positive_view = np.random.choice(np.array(list(view_set)))
+#     def sample_triplet(self, snaps, rot):
+#         anchor_frames = np.zeros((3, 3, 299, 299))
+#         anchor_index = self.sample_anchor_frame_index()
+#         positive_index = anchor_index
+#         # negative_index = self.sample_negative_frame_index(anchor_index)
+#         # random sample anchor view,and positive view
+#         #Remove anchor view
+#         view_set = set(range(self.n_views))
+#         anchor_view = np.random.choice(np.array(list(view_set)))
+#         view_set.remove(anchor_view)
+#         positive_view = np.random.choice(np.array(list(view_set)))
 
-        # Dont remove anchor view
-        # view_set = range(self.n_views)
-        # anchor_view = np.random.choice(np.array(view_set))
-        # positive_view = np.random.choice(np.array(view_set))
-        # anchor_frames[0] = snaps[anchor_view][anchor_index]
-        # anchor_frames[1] = snaps[positive_view][positive_index]
+#         # Dont remove anchor view
+#         # view_set = range(self.n_views)
+#         # anchor_view = np.random.choice(np.array(view_set))
+#         # positive_view = np.random.choice(np.array(view_set))
+#         # anchor_frames[0] = snaps[anchor_view][anchor_index]
+#         # anchor_frames[1] = snaps[positive_view][positive_index]
 
-        #negative_frame = snaps[negative_view][negative_index]
-        # what shape has pose? T x 7?
-        delta_rot = rot[positive_view].dot(rot[anchor_view].T)
-        delta_quat = Quaternion(matrix=delta_rot)
-        delta_quat = delta_quat.elements
-        delta_quat /= np.linalg.norm(delta_quat)
-        #delta_euler = rotationMatrixToEulerAngles(delta_rot)
-        #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
-        assert isRotationMatrix(delta_rot)
-        return (torch.Tensor(anchor_frames), torch.Tensor(delta_quat))
+#         #negative_frame = snaps[negative_view][negative_index]
+#         # what shape has pose? T x 7?
+#         delta_rot = rot[positive_view].dot(rot[anchor_view].T)
+#         delta_quat = Quaternion(matrix=delta_rot)
+#         delta_quat = delta_quat.elements
+#         delta_quat /= np.linalg.norm(delta_quat)
+#         #delta_euler = rotationMatrixToEulerAngles(delta_rot)
+#         #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
+#         assert isRotationMatrix(delta_rot)
+#         return (torch.Tensor(anchor_frames), torch.Tensor(delta_quat))
 
     def build_set(self):
         frames = torch.Tensor(self.sample_size, 2, 3, *self.frame_size)
@@ -485,16 +508,20 @@ class OneViewQuaternionBuilder(TwoViewQuaternionBuilder):
         super(OneViewQuaternionBuilder, self).__init__(n_views, video_directory, image_size, cli_args, sample_size, n_seqs)
     
     def sample_triplet(self, snaps, rot):
-        anchor_frames = np.zeros((1, 3, 299, 299))
         anchor_index = self.sample_anchor_frame_index()
         positive_index = anchor_index
         
         # random sample anchor view,and positive view
         view_set = set(range(self.n_views))
         anchor_view = np.random.choice(np.array(list(view_set)))
-        anchor_frames[0] = snaps[anchor_view][anchor_index]
+        anchor_frame = snaps[anchor_view][anchor_index]
         
-
+        anchor_frame = np.transpose(np.asarray(content_transform(np.uint8(np.transpose(255*anchor_frame, [1,2,0])))) / 255.0, [2,0,1])
+        #seed = random.randint(0,2**32)
+        #random.seed(seed)
+        #test2 = np.transpose(np.asarray(cj(rc(tp(np.uint8(np.transpose(255*anchor_frame, [1,2,0])))))) / 255.0, [2,0,1])
+        #random.seed(seed)
+        #test = np.transpose(np.asarray(content_transform(np.uint8(np.transpose(255*anchor_frame, [1,2,0])))) / 255.0, [2,0,1])
         # what shape has pose? T x 7?
         rot = rot[anchor_view].T
         quat = Quaternion(matrix=rot)
@@ -503,16 +530,16 @@ class OneViewQuaternionBuilder(TwoViewQuaternionBuilder):
         #delta_euler = rotationMatrixToEulerAngles(delta_rot)
         #delta_rot = np.reshape(delta_rot[:, :-1], -1) # only predict first two columns
         assert isRotationMatrix(rot)
-        return (torch.Tensor(anchor_frames), torch.Tensor(quat))
+        return (torch.Tensor(anchor_frame), torch.Tensor(quat))
 
     def build_set(self):
-        frames = torch.Tensor(self.sample_size, 1, 3, *self.frame_size)
+        frames = torch.Tensor(self.sample_size, 3, *self.frame_size)
         quats = torch.Tensor(self.sample_size, 4)
         snaps, debug_paths = self.get_videos(self.sequence_index * self.n_views)
         #print("building set from video sequence, loaded paths: {}".format(debug_paths))
         for i in range(0, self.sample_size):
             anchor_frame, quat = self.sample_triplet(snaps, self.rots)
-            frames[i, 0, :, :, :] = anchor_frame[0]
+            frames[i, :, :, :] = anchor_frame
             quats[i] = quat
         self.sequence_index = (self.sequence_index + 1) % self.sequence_count
         # Second argument is labels. Not used.
@@ -1337,7 +1364,7 @@ class MultiViewDepthTripletBuilder(MultiViewTripletBuilder):
         return views 
 
 class SingleViewPoseBuilder(object):
-    def __init__(self, view, video_directory, image_size, cli_args, sample_size=500):
+    def __init__(self, view, video_directory, image_size, cli_args, toRot=True, sample_size=500):
         self.frame_size = image_size
         self.view = view
         self._read_video_dir(video_directory)
@@ -1349,10 +1376,11 @@ class SingleViewPoseBuilder(object):
         self.video_index = 0
         self.cli_args = cli_args
         self.sample_size = sample_size
+        self.toRot = toRot
 
     def _read_video_dir(self, video_directory):
         self._video_directory = video_directory
-        filenames = ls_extracted(video_directory)
+        filenames = ls_view(video_directory, 0)
         self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if f.endswith('.mp4')]
         self.video_count = len(self.video_paths)
 
@@ -1387,21 +1415,28 @@ class SingleViewPoseBuilder(object):
     
     @functools.lru_cache(maxsize=1)
     def get_pose(self, index):
-        return np.load(self.video_paths[index].split('.mp4')[0]+'.npy')[:, -4:]
+        # PyQuaternion: WXYZ, pybullet> XYZW
+        pose = np.load(self.video_paths[index].split('.mp4')[0]+'.npy')[:, -4:]
+        return pose
 
     def sample(self, snap, pose):
         anchor_index = self.sample_anchor_frame_index()
         anchor_frame = snap[anchor_index]
-        anchor_pose = pose[anchor_index]
+        anchor_frame = np.transpose(np.asarray(content_transform(np.uint8(np.transpose(255*anchor_frame, [1,2,0])))) / 255.0, [2,0,1])
+        anchor_pose_qt = pose[anchor_index]
+        if self.toRot:
+            anchor_pose_qt = Quaternion(anchor_pose_qt[[-1, 0, 1, 2]])
+            anchor_pose = anchor_pose_qt.rotation_matrix 
         return (torch.Tensor(anchor_frame), torch.Tensor(anchor_pose))
 
     def build_set(self):
         triplets = []
         frames = torch.Tensor(self.sample_size, 3, *self.frame_size)
-        poses = torch.Tensor(self.sample_size, 4)
-        # print("Create triplets from {}".format(self.video_paths[self.video_index]))
-        
-        
+        if self.toRot:
+            poses = torch.Tensor(self.sample_size, 3, 3)
+        else:
+            poses = torch.Tensor(self.sample_size, 4)
+        # print("Create triplets from {}".format(self.video_paths[self.video_index]))        
         snap = self.get_video(self.video_index)
         pose = self.get_pose(self.video_index)
         

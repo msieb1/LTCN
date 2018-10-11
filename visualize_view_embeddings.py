@@ -158,8 +158,8 @@ def main(args):
             # resized_depth = resize_frame(depth_rescaled[:, :, None], IMAGE_SIZE)[None, :]
             #frames = np.concatenate(resized_image, axis=0)
             #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
-            #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image_before, resized_image, use_cuda=USE_CUDA)
-            emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
+            emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image_before, resized_image, use_cuda=USE_CUDA)
+            #emb_unnormalized, a_pred = get_view_embedding(tcn, resized_image, use_cuda=USE_CUDA)
             embedding = emb_unnormalized/ np.linalg.norm(emb_unnormalized)
             embeddings_episode_buffer.append(embedding)
             label_buffer.append(int(file.split('_')[0])) # video sequence label

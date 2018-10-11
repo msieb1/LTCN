@@ -39,6 +39,7 @@ from utils.rot_utils_old import create_rot_from_vector, rotationMatrixToEulerAng
 from utils.network_utils import loss_rotation, loss_euler_reparametrize, loss_axisangle, batch_size, apply,\
                                     loss_quat, loss_quat_single
 
+
 sys.path.append('/home/max/projects/gps-lfd') 
 sys.path.append('/home/msieb/projects/gps-lfd')
 from config_server import Config_Isaac_Server as Config # Import approriate config
@@ -51,31 +52,25 @@ IMAGE_SIZE = (299, 299)
 ITERATE_OVER_TRIPLETS = 1 
 ACTION_DIM = 4
 
-EXP_NAME = conf.EXP_NAME
+EXP_NAME = args.exp_name
 #EXP_DIR = os.path.join('/home/msieb/data/tcn_data/experiments', EXP_NAME)
 #EXP_DIR = os.path.join('/home/msieb/projects/data/tcn_data/experiments', EXP_NAME)
 EXP_DIR = conf.EXP_DIR
 MODEL_FOLDER = conf.MODEL_FOLDER
 USE_CUDA = conf.USE_CUDA
 NUM_VIEWS = 100 
-SAMPLE_SIZE = 1000 
+SAMPLE_SIZE = 500
 VAL_SEQS = 1
 TRAIN_SEQS_PER_EPOCH = 1 
 logdir = os.path.join('runs', MODEL_FOLDER, time_stamped()) 
 print("logging to {}".format(logdir))
 writer = SummaryWriter(logdir)
 
-
-builder = OneViewQuaternionBuilder
-loss_fn = loss_quat_single
-#builder = TwoViewQuaternionBuilder
-#loss_fn = loss_quat
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--start-epoch', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--save-every', type=int, default=20)
+    parser.add_argument('--save-every', type=int, default=10)
     parser.add_argument('--model-folder', type=str, default=join(EXP_DIR, EXP_NAME,'trained_models', MODEL_FOLDER, time_stamped()))
     parser.add_argument('--load-model', type=str, required=False)
     # parser.add_argument('--train-directory', type=str, default='./data/multiview-pouring/train/')
@@ -90,14 +85,21 @@ def get_args():
     parser.add_argument('--triplets-from-videos', type=int, default=5)
     parser.add_argument('--n-views', type=int, default=NUM_VIEWS)
     parser.add_argument('--alpha', type=float, default=0.01, help='weighing factor of language loss to triplet loss')
+    
     # Model parameters
     parser.add_argument('--embed_size', type=int , default=32, help='dimension of word embedding vectors')
     parser.add_argument('--hidden_size', type=int , default=256, help='dimension of lstm hidden states')
     parser.add_argument('--num_layers', type=int , default=1, help='number of layers in lstm')
     return parser.parse_args()
-
 args = get_args()
 print(args)
+
+
+builder = OneViewQuaternionBuilder
+loss_fn = loss_quat_single
+#builder = TwoViewQuaternionBuilder
+#loss_fn = loss_quat
+
 
 logger = Logger(args.log_file)
 
