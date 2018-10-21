@@ -78,10 +78,10 @@ class PosNet(EmbeddingNet):
         return self.normalize(x) * self.alpha
         
 class TCNModel(EmbeddingNet):
-    def __init__(self, inception, action_dim=4):  
+    def __init__(self, inception, action_dim=6):  
         super(TCNModel, self).__init__()
         self.action_dim = action_dim
-        self.state_dim =4096 
+        self.state_dim = 1024
         self.transform_input = True
         self.Conv2d_1a_3x3 = inception.Conv2d_1a_3x3
         self.Conv2d_2a_3x3 = inception.Conv2d_2a_3x3
@@ -99,10 +99,12 @@ class TCNModel(EmbeddingNet):
         self.Mixed_7a = inception.Mixed_7a
         self.Mixed_7b = inception.Mixed_7b
         self.Mixed_7c = inception.Mixed_7c
-        self.Conv2d_6a_3x3 = BatchNormConv2d(288, 100, kernel_size=3, stride=1)
-        self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
+        self.Conv2d_6a_3x3 = BatchNormConv2d(3, 100, kernel_size=3, stride=1)
+        self.Conv2d_6b_3x3 = BatchNormConv2d(100, 200, kernel_size=3, stride=1)
+        self.Conv2d_6c_3x3 = BatchNormConv2d(200, 100, kernel_size=3, stride=2)
+        self.Conv2d_6d_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=2)
         self.SpatialSoftmax = nn.Softmax2d()
-        self.FullyConnected7a = Dense(31 * 31 * 20, self.state_dim)
+        self.FullyConnected7a = Dense(36*36*20, self.state_dim)
         self.FullyConnectedSingle = Dense(self.state_dim, 512)
         # self.FullyConnectedConcat = Dense(2*self.state_dim, 128)
         # self.FullyConnectedPose1 = Dense(128, 256)
@@ -126,30 +128,14 @@ class TCNModel(EmbeddingNet):
             x[:,  2] = x[:,  2] * (0.225 / 0.5) + (0.406 - 0.5) / 0.5
         # 299 x 299 x 3
 
-        x = self.Conv2d_1a_3x3(x)
-        # 149 x 149 x 32
-        x = self.Conv2d_2a_3x3(x)
-        # 147 x 147 x 32
-        x = self.Conv2d_2b_3x3(x)
-        # 147 x 147 x 64
-        x = F.max_pool2d(x, kernel_size=3, stride=2)
-        # 73 x 73 x 64
-        x = self.Conv2d_3b_1x1(x)
-        # 73 x 73 x 80
-        x = self.Conv2d_4a_3x3(x)
-        # 71 x 71 x 192
-        x = F.max_pool2d(x, kernel_size=3, stride=2)
-        # 35 x 35 x 192
-        x = self.Mixed_5b(x)
-        # 35 x 35 x 256
-        x = self.Mixed_5c(x)
-        # 35 x 35 x 288
-        y = self.Mixed_5d(x)
         # 33 x 33 x 100
-        x = self.Conv2d_6a_3x3(y)
+        x = self.Conv2d_6a_3x3(x)
         # 31 x 31 x 20
         x = self.Conv2d_6b_3x3(x)
         # 31 x 31 x 20
+        x = F.max_pool2d(x, kernel_size=3, stride=2) 
+        x = self.Conv2d_6c_3x3(x)
+        x = self.Conv2d_6d_3x3(x)
         # x = self.SpatialSoftmax(x)
         # 32
         x = self.FullyConnected7a(x.view(x.size()[0], -1))
@@ -165,6 +151,6 @@ class TCNModel(EmbeddingNet):
         return first_view_gt, a_pred
 
 
-def define_model(pretrained=True, action_dim=4):
+def define_model(pretrained=True, action_dim=6):
     return TCNModel(models.inception_v3(pretrained=pretrained), action_dim)
 

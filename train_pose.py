@@ -31,6 +31,8 @@ import matplotlib.pyplot as plt
 from shutil import copy2
 import importlib
 from pyquaternion import Quaternion
+from logger import Logger
+from shutil import copy2
 
 from models.pose_predictor_euler import define_model
 from utils.plot_utils import plot_mean
@@ -47,12 +49,13 @@ os.environ["CUDA_VISIBLE_DEVICES"]= "1,2,3"
 IMAGE_SIZE = (299, 299)
 NUM_VIEWS = 1
 SAMPLE_SIZE = 30
-VAL_SEQS = 5
-TRAIN_SEQS_PER_EPOCH = 50
-LOSS_FN = loss_euler_reparametrize
+VAL_SEQS = 3 
+TRAIN_SEQS_PER_EPOCH = 30
+LOSS_FN = loss_euler_reparametrize 
 
 EXP_ROOT_DIR = '/media/hdd/msieb/data/tcn_data/experiments'
 sys.path.append(EXP_ROOT_DIR)
+
 
 class Trainer(object):
     def __init__(self, use_cuda, load_model, model_folder, train_directory, validation_directory, builder, loss_fn, args, multi_gpu=True):
@@ -65,18 +68,23 @@ class Trainer(object):
 
         self.builder = builder
         self.loss_fn = loss_fn
+        self.loss_geodesic = loss_rotation
         self.logdir = join(model_folder, 'logs')
         self.writer = SummaryWriter(self.logdir)
-        self.logger = Logger(self.args.log_file)
+        #self.logger = Logger(self.logdir)
         self.itr = 0
-
+        self.lambd = 0.1
         # Create Model
         self.model = self.create_model()
         if multi_gpu:
             self.model = torch.nn.DataParallel(self.model, device_ids=range(torch.cuda.device_count()))
+        copy2(os.path.realpath(__file__).strip('.pyc') + '.py', self.logdir)
+        copy2('/'.join(os.path.realpath(__file__).split('/')[:-1])+ '/models/pose_predictor_euler.py', self.logdir)
+        copy2('/'.join(os.path.realpath(__file__).split('/')[:-1])+ '/utils/builder_utils.py', self.logdir)
+        copy2('/'.join(os.path.realpath(__file__).split('/')[:-1])+ '/utils/builders.py', self.logdir)
 
         # Build validation set
-        validation_builder = builder(self.args.n_views, validation_directory, IMAGE_SIZE, self.args, sample_size=SAMPLE_SIZE)
+        validation_builder = builder(self.args.n_views, validation_directory, IMAGE_SIZE, self.args, sample_size=SAMPLE_SIZE, toRot=True)
         validation_set = [validation_builder.build_set() for i in range(VAL_SEQS)]
         validation_set = ConcatDataset(validation_set)
         self.len_validation_set = len(validation_set)
@@ -89,10 +97,10 @@ class Trainer(object):
                         )
         self.validation_calls = 0
         # Build Training Set
-        self.triplet_builder = builder(self.args.n_views, \
-            train_directory, IMAGE_SIZE, self.args, sample_size=SAMPLE_SIZE)
+        self.training_builder = builder(self.args.n_views, \
+            train_directory, IMAGE_SIZE, self.args, sample_size=SAMPLE_SIZE, toRot=True)
         self.training_queue = multiprocessing.Queue(1)
-        dataset_builder_process = multiprocessing.Process(target=self.build_set, args=(self.training_queue, self.triplet_builder, self.logger), daemon=True)
+        dataset_builder_process = multiprocessing.Process(target=self.build_set, args=(self.training_queue, self.training_builder), daemon=True)
         dataset_builder_process.start()
 
         # Get Logger
@@ -114,7 +122,7 @@ class Trainer(object):
 
         for epoch in range(self.args.start_epoch, self.args.start_epoch + self.args.epochs):
             print("=" * 20)
-            self.logger.info("Starting epoch: {0} ".format(epoch))
+            print("Starting epoch: {0} ".format(epoch))
 
             dataset = self.training_queue.get()
             data_loader = DataLoader(
@@ -125,67 +133,84 @@ class Trainer(object):
             )
             
             train_embedding_features_buffer = []
+            train_embedding_labels_buffer = []
             train_images_buffer = []
 
             correct = 0
-
+            total = 0
             for _ in range(0, 1):
                 losses = []
-
+                geodesic_losses = []
                 for minibatch in data_loader:
                     if self.use_cuda:
                         anchor_frames = minibatch[0].cuda()
                         #anchor_euler_reparam = minibatch[1].cuda() # load as 3x3 rotation matrix
                         anchor_rots = minibatch[1].cuda() # load as 3x3 rotation matrix
                     # frames = Variable(minibatch)
-                    loss, a_pred = self.loss_fn(self.model, anchor_frames, anchor_rots)
-                    losses.append(loss.data.cpu().numpy()) 
+                    loss_, a_pred = self.loss_fn(self.model, anchor_frames, anchor_rots)
+                    loss_geodesic, _  = self.loss_geodesic(self.model, anchor_frames, anchor_rots)
+                    if epoch > 10 and False:
+                        loss = loss_geodesic * self.lambd
+                    else:
+                        loss = loss_
+                    losses.append(loss_.data.cpu().numpy()) 
+                    geodesic_losses.append(loss_geodesic.data.cpu().numpy()) 
+                    
                     anchor_euler = euler_XYZ_to_reparam(apply(rotationMatrixToEulerAngles, anchor_rots))
-                    correct += (torch.norm(a_pred - anchor_euler, 2) < 0.1).data.cpu().numpy().sum()                    # print(gradcheck(loss_fn, (tcn, minibatch,)))     
+                    total += a_pred.shape[0]
+                    correct += (torch.norm(a_pred - anchor_euler, dim=1) < 0.2).data.cpu().numpy().sum()                    # print(gradcheck(loss_fn, (tcn, minibatch,)))     
                     self.optimizer.zero_grad()
                     loss.backward()
                     self.optimizer.step()
 
                     # Add embeddings
                     train_embedding_features_buffer.append(apply(rotationMatrixToEulerAngles, anchor_rots))
+                    train_embedding_labels_buffer.append(apply(rotationMatrixToEulerAngles, anchor_rots))
                     train_images_buffer.append(anchor_frames)
             print("logging to {}".format(self.logdir))
 
             self.writer.add_scalar('data/train_loss', np.mean(losses), self.itr)
-            self.writer.add_scalar('data/train_correct', correct / len(data_loader), self.itr)
+            self.writer.add_scalar('data/train_loss_geodesic', np.mean(geodesic_losses), self.itr)
+            self.writer.add_scalar('data/train_correct', correct / total, self.itr)
             self.itr += 1  
             trn_losses_.append(np.mean(losses))
-            self.logger.info('train loss: ', np.mean(losses))
-            self.logger.info("Training score correct  {correct}/{total}".format(
+            print("Training score correct  {correct}/{total}".format(
             correct=correct,
-            total=len(data_loader)
+            total=total
             ))
+            print('train loss: ', np.mean(losses))
+            print('train loss geodesic: ', np.mean(geodesic_losses))
             trn_acc_.append(correct)
+            #self.logger.scalar_summary('train_loss', np.mean(losses), epoch)
+            #self.logger.scalar_summary('train_acc', correct, epoch)
 
             self.writer.add_image('frame_1', minibatch[0][0], self.itr)
-            
+             
             # Get embeddings
-            features = torch.cat(train_embedding_features_buffer[:30]).squeeze_()
+            features = torch.cat(train_embedding_features_buffer[:30]).squeeze_() 
+            labels= torch.cat(train_embedding_labels_buffer[:30]).squeeze_() 
             # features = train_embedding_features_buffer.view(train_embedding_features_buffer.shape[0]*train_embedding_features_buffer.shape[1], -1)
             # label = torch.Tensor(np.asarray(label_buffer))
             images = torch.cat(train_images_buffer[:30]).squeeze_()#/255.0, [0, 3, 1, 2]
-            self.writer.add_embedding(features, label_img=images, global_step=epoch)
+            self.writer.add_embedding(features, metadata=labels, label_img=images, global_step=epoch)
             
             if epoch % 1 == 0:
                 loss, correct  = self.validate()
                 self.learning_rate_scheduler.step(loss)
                 val_losses_.append(loss)
                 val_acc_.append(correct)
+                #self.logger.scalar_summary('val_loss', loss, self.validation_calls)
+                #self.logger.scalar_summary('val_acc', correct, self.validation_calls)
 
             if epoch % self.args.save_every == 0 and epoch != 0:
-                self.logger.info('Saving model.')
+                print('Saving model.')
                 self.save_model(self.model, self.model_filename(self.args.model_name, epoch), join(self.model_folder, 'weight_files'))
                 print("logging to {}".format(self.logdir))
-
-            plot_mean(trn_losses_, self.model_folder, 'train_loss')
-            plot_mean(val_losses_, self.model_folder, 'validation_loss')
-            plot_mean(trn_acc_, self.model_folder, 'train_acc')
-            plot_mean(val_acc_, self.model_folder, 'validation_accuracy')
+            
+            plot_mean(trn_losses_, self.logdir, 'train_loss')
+            plot_mean(val_losses_, self.logdir, 'validation_loss')
+            plot_mean(trn_acc_, self.logdir, 'train_acc')
+            plot_mean(val_acc_, self.logdir, 'validation_accuracy')
             # plot_mean(val_acc_no_margin_, self.model_folder, 'validation_accuracy_no_margin')
 
     def validate(self):
@@ -200,18 +225,17 @@ class Trainer(object):
             loss, a_pred = self.loss_fn(self.model, anchor_frames, anchor_rots)
             losses.append(loss.data.cpu().numpy())
             anchor_euler = euler_XYZ_to_reparam(apply(rotationMatrixToEulerAngles, anchor_rots))
-            correct += (torch.norm(a_pred - anchor_euler, 2) < 0.1).data.cpu().numpy().sum()
-
+            correct += (torch.norm(a_pred - anchor_euler, dim=1) < 0.1).data.cpu().numpy().sum()
         self.writer.add_scalar('data/valid_loss', np.mean(losses), self.validation_calls)
         self.writer.add_scalar('data/validation_correct', correct / self.len_validation_set, self.validation_calls)
 
         self.validation_calls += 1
         loss = np.mean(losses)
-        self.logger.info("Validation score correct  {correct}/{total}".format(
+        print("Validation score correct  {correct}/{total}".format(
             correct=correct,
             total=self.len_validation_set
         ))
-        self.logger.info('val loss: ',loss)
+        print('val loss: ',loss)
         return loss, correct
     
 
@@ -224,11 +248,11 @@ class Trainer(object):
         torch.save(model.state_dict(), model_path)
 
 
-    def build_set(self, queue, triplet_builder, log):
+    def build_set(self, queue, training_builder):
         while 1:
             datasets = []
             for i in range(TRAIN_SEQS_PER_EPOCH):
-                dataset = triplet_builder.build_set()
+                dataset = training_builder.build_set()
                 datasets.append(dataset)
             dataset = ConcatDataset(datasets)
             # log.info('Created {0} triplets'.format(len(dataset)))
@@ -294,7 +318,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--start-epoch', type=int, default=0)
-    parser.add_argument('--epochs', type=int, default=1000)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--save-every', type=int, default=10)
     parser.add_argument('--load-model', type=str, required=False)
    

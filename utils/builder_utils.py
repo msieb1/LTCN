@@ -138,9 +138,13 @@ def ls_txt(path):
 
 def ls_view(path, view):
     # Only lists video files
-    return sorted([p for p in os.listdir(path) if p[0] != '.' and (p.endswith(str(view) + '.mp4'))], key=lambda x: int(x.split('_')[0]))
+    files = sorted([p for p in os.listdir(path) if p[0] != '.' and (p.endswith(str(view) + '.mp4')) and not p.endswith('cropped.mp4')], key=lambda x: int(x.split('_')[0]))
+    if len(files) == 0:
+        files = sorted([p for p in os.listdir(path) if p[0] != '.' and p.endswith('.mp4')], key=lambda x: int(x.split('_')[0]))
+    return files
 
 def ls_extracted(path):
+
      # returns list of folders in directory without hidden ones.
     return sorted([p for p in os.listdir(path) if (p[0] != '.' and p != 'debug') ], key=lambda x: int(x.split('_')[0]))
 

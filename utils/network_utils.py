@@ -59,17 +59,14 @@ def loss_quat(model, minibatch, lambd=0.01):
    #     lambd * torch.nn.SmoothL1Loss()(features_first_view_gt, features_second_view_gt.detach())
   return loss
 
-def loss_quat_single(model, minibatch, lambd=0.01):
+def loss_quat_single(model, anchor_frames, anchor_quats, lambd=0.01):
   """ 
   Calculates reparamerized euler angles as network output and puts
   loss on rotation matrix calculated from those, after normalizing the sin/cos values
   Assumes 6 dimensional rotation parameters -> sin/cos per angle,
   over all 6 values
   """
-  if USE_CUDA:
-     anchor_frames = minibatch[0].cuda()
-     anchor_quats = minibatch[1].cuda() # load as 3x3 rotation matrix
-  normed_x, a_pred, features_first_view_gt = model(anchor_frames)
+  features, a_pred = model(anchor_frames)
   assert a_pred.shape[-1] == 4
   dist = geodesic_dist_quat(anchor_quats, a_pred)
   #print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
@@ -83,27 +80,22 @@ def loss_quat_single(model, minibatch, lambd=0.01):
     print('exploded gradients')
   return loss
 
-def loss_rotation(model, minibatch, lambd=0.01):
+def loss_rotation(model, anchor_frames, anchor_rots, lambd=0.01):
   """ 
   Calculates reparametrized euler angles as network output and puts
   loss on rotation matrix calculated from those, after normalizing the sin/cos values
   Assumes 6 dimensional rotation parameters -> sin/cos per angle,
   over all 6 values
   """
-  if USE_CUDA:
-     anchor_frames = minibatch[0].cuda()
-     anchor_rots = minibatch[1].cuda() # load as 3x3 rotation matrix
-  
-  features_second_view_gt, a_pred, features_first_view_gt = model(anchor_frames)
-  assert a_pred.shape[-1] == 6
+  features, a_pred = model(anchor_frames) 
   rots_pred = apply(sincos2rotm, a_pred)
   dist = geodesic_dist(anchor_rots, rots_pred)
-  print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
+  #print("Correctly classified rotations: {}".format(np.sum(dist.data.cpu().numpy() < 0.2)))
 
   #print("distances of batch: ", dist.data.cpu().numpy())
-  loss = dist.mean() + \
-        lambd * torch.nn.SmoothL1Loss()(features_first_view_gt, features_second_view_gt.detach())
-  return loss
+  loss = dist.mean() 
+   #     lambd * torch.nn.SmoothL1Loss()(features_first_view_gt, features_second_view_gt.detach())
+  return loss, a_pred
 
 
 def loss_axisangle(model, minibatch, lambd=0.1):

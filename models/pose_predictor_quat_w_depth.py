@@ -81,7 +81,7 @@ class TCNModel(EmbeddingNet):
     def __init__(self, inception, action_dim=4):  
         super(TCNModel, self).__init__()
         self.action_dim = action_dim
-        self.state_dim =4096 
+        self.state_dim = 128
         self.transform_input = True
         self.Conv2d_1a_3x3 = inception.Conv2d_1a_3x3
         self.Conv2d_2a_3x3 = inception.Conv2d_2a_3x3
@@ -103,11 +103,11 @@ class TCNModel(EmbeddingNet):
         self.Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
         self.SpatialSoftmax = nn.Softmax2d()
         self.FullyConnected7a = Dense(31 * 31 * 20, self.state_dim)
-        self.FullyConnectedSingle = Dense(self.state_dim, 512)
+        self.FullyConnectedSingle = Dense(self.state_dim, 128)
         # self.FullyConnectedConcat = Dense(2*self.state_dim, 128)
         # self.FullyConnectedPose1 = Dense(128, 256)
-        self.FullyConnectedPose2 = Dense(512, 256)
-        self.FullyConnectedPose3 = Dense(256, self.action_dim)
+        self.FullyConnectedPose2 = Dense(256, 128)
+        self.FullyConnectedPose3 = Dense(128, self.action_dim)
         self.tanh = torch.nn.Tanh()
         self.hardtanh = torch.nn.Hardtanh(min_val=0, max_val=math.pi)
 
@@ -116,9 +116,21 @@ class TCNModel(EmbeddingNet):
         self.FullyConnectedAction3 = Dense(512, 256)
         self.FullyConnectedAction4 = Dense(256, 32)
 
+        # For depth
+        self.Depth_Conv2d_6a_3x3 = BatchNormConv2d(1, 100, kernel_size=3, stride=1)
+        self.Depth_Conv2d_6b_3x3 = BatchNormConv2d(100, 20, kernel_size=3, stride=1)
+        self.Depth_max_pool_1 = F.max_pool2d(x, kernel_size=2, stride=2)
+        self.Depth_Conv2d_6b_3x3 = BatchNormConv2d(83, 20, kernel_size=3, stride=1)
+ 
+        self.Depth_SpatialSoftmax = nn.Softmax2d()
+        self.Depth_FullyConnected7a = Dense(31 * 31 * 20, self.state_dim)
+        self.Depth_FullyConnectedSingle = Dense(self.state_dim, 128)
+
+
+
         self.alpha = 10.0
 
-    def forward(self, x):
+    def forward(self, x, depth):
         if self.transform_input:
             x = x.clone()
             x[:,  0] = x[:,  0] * (0.229 / 0.5) + (0.485 - 0.5) / 0.5
@@ -150,15 +162,15 @@ class TCNModel(EmbeddingNet):
         # 31 x 31 x 20
         x = self.Conv2d_6b_3x3(x)
         # 31 x 31 x 20
-        # x = self.SpatialSoftmax(x)
+        x = self.SpatialSoftmax(x)
         # 32
         x = self.FullyConnected7a(x.view(x.size()[0], -1))
         # Reshape to separate inputs
         # Predicts cos/sin values (tanh'ed)
         a_pred = self.FullyConnectedSingle(x)
-        a_pred = self.FullyConnectedPose2(a_pred)
         a_pred = self.FullyConnectedPose3(a_pred)
         a_pred = self.normalize(a_pred)
+        
         first_view_gt = x
         # Note that ground truth (gt) means the feature extracted from the intermediate FC, and pred means head output
        

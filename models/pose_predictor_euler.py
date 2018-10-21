@@ -81,7 +81,7 @@ class TCNModel(EmbeddingNet):
     def __init__(self, inception, action_dim=6 ):  
         super(TCNModel, self).__init__()
         self.action_dim = action_dim
-        self.state_dim = 32
+        self.state_dim = 2048 
         self.transform_input = True
         self.Conv2d_1a_3x3 = inception.Conv2d_1a_3x3
         self.Conv2d_2a_3x3 = inception.Conv2d_2a_3x3
@@ -106,8 +106,8 @@ class TCNModel(EmbeddingNet):
         self.FullyConnectedSingle = Dense(self.state_dim, 128)
         # self.FullyConnectedConcat = Dense(2*self.state_dim, 128)
         # self.FullyConnectedPose1 = Dense(128, 256)
-        # self.FullyConnectedPose2 = Dense(256, 128)
-        self.FullyConnectedPose3 = Dense(self.state_dim, self.action_dim)
+        self.FullyConnectedPose2 = Dense(self.state_dim, 512)
+        self.FullyConnectedPose3 = Dense(512, self.action_dim)
         self.tanh = torch.nn.Tanh()
         self.hardtanh = torch.nn.Hardtanh(min_val=0, max_val=math.pi)
 
@@ -164,7 +164,7 @@ class TCNModel(EmbeddingNet):
         # x_cat = torch.cat((x1, x2), 1)     
         # x_cat = self.FullyConnectedConcat(x_cat)
         # a_inv = self.FullyConnectedPose1(x_cat)
-        # a_inv = self.FullyConnectedPose2(a_inv)
+        x = self.FullyConnectedPose2(x)
         a_pred = self.FullyConnectedPose3(x)
         a_pred = self.tanh(a_pred)
         

@@ -1364,7 +1364,7 @@ class MultiViewDepthTripletBuilder(MultiViewTripletBuilder):
         return views 
 
 class SingleViewPoseBuilder(object):
-    def __init__(self, view, video_directory, image_size, cli_args, toRot=True, sample_size=500):
+    def __init__(self, view, video_directory, image_size, cli_args, toRot=False, sample_size=500):
         self.frame_size = image_size
         self.view = view
         self._read_video_dir(video_directory)
@@ -1380,9 +1380,10 @@ class SingleViewPoseBuilder(object):
 
     def _read_video_dir(self, video_directory):
         self._video_directory = video_directory
-        filenames = ls_view(video_directory, 0)
+        filenames = ls_view(video_directory, 2)
         self.video_paths = [os.path.join(self._video_directory, f) for f in filenames if f.endswith('.mp4')]
         self.video_count = len(self.video_paths)
+        
 
     def _read_extracted_video_dir(self, video_directory):
         self._video_directory = video_directory
@@ -1416,8 +1417,16 @@ class SingleViewPoseBuilder(object):
     @functools.lru_cache(maxsize=1)
     def get_pose(self, index):
         # PyQuaternion: WXYZ, pybullet> XYZW
-        pose = np.load(self.video_paths[index].split('.mp4')[0]+'.npy')[:, -4:]
-        return pose
+        try:
+            pose = np.load(self.video_paths[index].split('view')[0]+'obj.npy')[:, -4:]
+            return pose
+        except:
+            try:
+                pose = np.load(self.video_paths[index].split('.mp4')[0]+'.npy')[:, -4:]
+                return pose
+            except:
+                pose = np.load(self.video_paths[index].split('_cropped.mp4')[0]+'.npy')[:, -4:]
+                return pose
 
     def sample(self, snap, pose):
         anchor_index = self.sample_anchor_frame_index()
@@ -1427,6 +1436,8 @@ class SingleViewPoseBuilder(object):
         if self.toRot:
             anchor_pose_qt = Quaternion(anchor_pose_qt[[-1, 0, 1, 2]])
             anchor_pose = anchor_pose_qt.rotation_matrix 
+        else:
+            anchor_pose = anchor_pose_qt
         return (torch.Tensor(anchor_frame), torch.Tensor(anchor_pose))
 
     def build_set(self):
