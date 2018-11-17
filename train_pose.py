@@ -35,6 +35,7 @@ from logger import Logger
 from shutil import copy2
 
 from models.pose_predictor_euler import define_model
+MODEL_NAME = 'pose_predictor_euler'
 from utils.plot_utils import plot_mean
 from utils.rot_utils_old import create_rot_from_vector, rotationMatrixToEulerAngles, \
                             isRotationMatrix, eulerAnglesToRotationMatrix, \
@@ -48,9 +49,9 @@ os.environ["CUDA_VISIBLE_DEVICES"]= "1,2,3"
   
 IMAGE_SIZE = (299, 299)
 NUM_VIEWS = 1
-SAMPLE_SIZE = 30
-VAL_SEQS = 3 
-TRAIN_SEQS_PER_EPOCH = 30
+SAMPLE_SIZE = 100 
+VAL_SEQS = 2
+TRAIN_SEQS_PER_EPOCH = 39 
 LOSS_FN = loss_euler_reparametrize 
 
 EXP_ROOT_DIR = '/media/hdd/msieb/data/tcn_data/experiments'
@@ -58,12 +59,13 @@ sys.path.append(EXP_ROOT_DIR)
 
 
 class Trainer(object):
-    def __init__(self, use_cuda, load_model, model_folder, train_directory, validation_directory, builder, loss_fn, args, multi_gpu=True):
+    def __init__(self, use_cuda, load_model_name, model_folder, train_directory, validation_directory, builder, loss_fn, args, multi_gpu=True):
         self.use_cuda = use_cuda
-        self.load_model = load_model
+        self.load_model_name = load_model_name
         self.model_folder = model_folder
         self.validation_directory = validation_directory
         self.train_directory = train_directory
+        self.model_name = MODEL_NAME
         self.args = args
 
         self.builder = builder
@@ -111,6 +113,9 @@ class Trainer(object):
         # This will diminish the learning rate at the milestones ///// 0.1, 0.01, 0.001 if not using automized scheduler
         self.learning_rate_scheduler = lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min')
         # self.criterion = nn.CrossEntropyLoss()
+        self.save_model(self.model, self.model_filename(self.model_name,'random'), join(self.model_folder, 'weight_files'))
+        print("Saved uninitialixeD")
+
 
     def train(self):
 
@@ -118,7 +123,7 @@ class Trainer(object):
         val_losses_= []
         val_acc_ = []
         trn_acc_ = []
-
+        best_validation_loss = 1e10
 
         for epoch in range(self.args.start_epoch, self.args.start_epoch + self.args.epochs):
             print("=" * 20)
@@ -201,10 +206,14 @@ class Trainer(object):
                 val_acc_.append(correct)
                 #self.logger.scalar_summary('val_loss', loss, self.validation_calls)
                 #self.logger.scalar_summary('val_acc', correct, self.validation_calls)
+                if loss < best_validation_loss:
+                    best_validation_loss = loss
+                    print('New best model - saving checkpoint to {}'.format(self.model_folder, 'weight_files'))
+                    self.save_model(self.model, self.model_filename(self.model_name, 'best'), join(self.model_folder, 'weight_files'))
 
             if epoch % self.args.save_every == 0 and epoch != 0:
-                print('Saving model.')
-                self.save_model(self.model, self.model_filename(self.args.model_name, epoch), join(self.model_folder, 'weight_files'))
+                print('Saving model to {}'.format(join(self.model_folder)))
+                self.save_model(self.model, self.model_filename(self.model_name, epoch), join(self.model_folder, 'weight_files'))
                 print("logging to {}".format(self.logdir))
             
             plot_mean(trn_losses_, self.logdir, 'train_loss')
@@ -259,12 +268,12 @@ class Trainer(object):
             queue.put(dataset)
 
     def create_model(self):
-        model = define_model(pretrained=True)
+        model = define_model(pretrained=False)
         # model = PosNet()
-        if self.load_model:
+        if self.load_model_name != '':
             model_path = os.path.join(
                 self.model_folder,
-                self.load_model
+                self.load_model_name
             )
             # map_location allows us to load models trained on cuda to cpu.
             model.load_state_dict(torch.load(model_path, map_location=lambda storage, loc: storage))
@@ -308,7 +317,7 @@ def main(args):
     copy2('/'.join(os.path.realpath(__file__).split('/')[:-2]) + '/gps-lfd' + '/config.py', model_folder)
             
     # Build training class
-    trainer = Trainer(use_cuda, args.load_model, model_folder, train_directory, validation_directory, builder, loss_fn, args) 
+    trainer = Trainer(use_cuda, args.load_model_name, model_folder, train_directory, validation_directory, builder, loss_fn, args) 
     trainer.train()
 
 
@@ -318,9 +327,9 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--start-epoch', type=int, default=0)
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--save-every', type=int, default=10)
-    parser.add_argument('--load-model', type=str, required=False)
+    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--save-every', type=int, default=50)
+    parser.add_argument('--load-model-name', type=str, default='')
    
     parser.add_argument('--minibatch-size', type=int, default=8)
     parser.add_argument('--model-name', type=str, default='tcn')

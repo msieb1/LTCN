@@ -38,7 +38,9 @@ IMAGE_SIZE = (299, 299)
 ITERATE_OVER_TRIPLETS = 1 
 SAMPLE_SIZE = 100
 BUILDER = SingleViewTripletBuilder
-
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]= "1,2,3"
+  
 EXP_ROOT_DIR = '/media/hdd/msieb/data/tcn_data/experiments'
 sys.path.append(EXP_ROOT_DIR)
 
@@ -61,7 +63,10 @@ class Trainer(object):
         self.model = self.create_model()
         if multi_gpu:
             self.model = torch.nn.DataParallel(self.model, device_ids=range(torch.cuda.device_count()))
-
+        copy2(os.path.realpath(__file__).strip('.pyc') + '.py', self.logdir)
+        copy2('/'.join(os.path.realpath(__file__).split('/')[:-1])+ '/models/pose_predictor_euler.py', self.logdir)
+        copy2('/'.join(os.path.realpath(__file__).split('/')[:-1])+ '/utils/builder_utils.py', self.logdir)
+        copy2('/'.join(os.path.realpath(__file__).split('/')[:-1])+ '/utils/builders.py', self.logdir)
         # Build validation set
         validation_builder = builder(self.args.n_views, validation_directory, IMAGE_SIZE, self.args, sample_size=SAMPLE_SIZE)
         validation_set = [validation_builder.build_set() for i in range(6)]
@@ -260,25 +265,28 @@ class Trainer(object):
         exponent = epoch // 100
         return min(max(2 ** (exponent), 2), max_size)
 
-
 def main(args):
+    # module = importlib.import_module(args.exp_name + '.config')
+    # conf = getattr(module, 'Config_Isaac_Server')()
+    # EXP_DIR = conf.EXP_DIR
+    # MODEL_FOLDER = conf.MODEL_FOLDER
+
+
     # GPU Configuration
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     use_cuda = torch.cuda.is_available()
-    builder = BUILDER
-    
-    module = importlib.import_module(args.exp_name + '.config')
-    conf = getattr(module, 'Config_Isaac_Server')()
+
+    # Load model
     model_folder = join(EXP_ROOT_DIR, args.exp_name, 'trained_models', args.run_name, time_stamped())
     if not os.path.exists(model_folder):
         os.makedirs(model_folder)
-    os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-    os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1,2,3"
 
-    EXP_DIR = conf.EXP_DIR
-    MODEL_FOLDER = conf.MODEL_FOLDER
-    train_directory = join(EXP_ROOT_DIR, args.exp_name, 'train/') 
-    validation_directory = join(EXP_ROOT_DIR, args.exp_name, 'valid/') 
+    # Get data loader builder and loss function
+    builder = getattr(importlib.import_module('utils.builders'), args.builder)
+
+    # Define train and validation directories
+    train_directory = join(EXP_ROOT_DIR, args.exp_name, 'videos/train/') 
+    validation_directory = join(EXP_ROOT_DIR, args.exp_name, 'videos/valid/') 
 
     # Copies of executed config
     if not os.path.exists('/'.join(os.path.realpath(__file__).split('/')[:-1]) + '/experiments'):
@@ -286,8 +294,38 @@ def main(args):
     copy2('/'.join(os.path.realpath(__file__).split('/')[:-1]) + '/train_tcn_no_captions.py', model_folder)
     copy2('/'.join(os.path.realpath(__file__).split('/')[:-2]) + '/gps-lfd' + '/config.py', model_folder)
             
-    trainer = Trainer(use_cuda, args.load_model, model_folder, train_directory, validation_directory, builder, args) 
+    # Build training class
+    trainer = Trainer(use_cuda, args.load_model_name, model_folder, train_directory, validation_directory, builder, args) 
     trainer.train()
+
+
+# def main(args):
+#     # GPU Configuration
+#     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#     use_cuda = torch.cuda.is_available()
+#     builder = BUILDER
+    
+#     module = importlib.import_module(args.exp_name + '.config')
+#     conf = getattr(module, 'Config_Isaac_Server')()
+#     model_folder = join(EXP_ROOT_DIR, args.exp_name, 'trained_models', args.run_name, time_stamped())
+#     if not os.path.exists(model_folder):
+#         os.makedirs(model_folder)
+#     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+#     os.environ["CUDA_VISIBLE_DEVICES"]= "0, 1,2,3"
+
+#     EXP_DIR = conf.EXP_DIR
+#     MODEL_FOLDER = conf.MODEL_FOLDER
+#     train_directory = join(EXP_ROOT_DIR, args.exp_name, 'train/') 
+#     validation_directory = join(EXP_ROOT_DIR, args.exp_name, 'valid/') 
+
+#     # Copies of executed config
+#     if not os.path.exists('/'.join(os.path.realpath(__file__).split('/')[:-1]) + '/experiments'):
+#         os.makedirs('/'.join(os.path.realpath(__file__).split('/')[:-1]) + '/experiments')
+#     copy2('/'.join(os.path.realpath(__file__).split('/')[:-1]) + '/train_tcn_no_captions.py', model_folder)
+#     copy2('/'.join(os.path.realpath(__file__).split('/')[:-2]) + '/gps-lfd' + '/config.py', model_folder)
+            
+#     trainer = Trainer(use_cuda, args.load_model, model_folder, train_directory, validation_directory, builder, args) 
+#     trainer.train()
 
 
 
@@ -296,9 +334,9 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--start-epoch', type=int, default=0)
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--save-every', type=int, default=2)
-    parser.add_argument('--load-model', type=str, required=False)
+    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--save-every', type=int, default=5)
+    parser.add_argument('--load-model-name', type=str, default='')
 
     parser.add_argument('--minibatch-size', type=int, default=16)
     parser.add_argument('--margin', type=float, default=3.5)
@@ -320,6 +358,7 @@ if __name__ == '__main__':
     # parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--exp-name', type=str, required=True)
     parser.add_argument('--run-name', type=str, required=True)
+    parser.add_argument('--builder', type=str, required=True)
 
     args = parser.parse_args()
 
